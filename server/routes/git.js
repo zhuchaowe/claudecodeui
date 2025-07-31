@@ -9,12 +9,28 @@ const router = express.Router();
 const execAsync = promisify(exec);
 
 // Helper function to get the actual project path from the encoded project name
-async function getActualProjectPath(projectName) {
+async function getActualProjectPath(projectName, username) {
   try {
-    return await extractProjectDirectory(projectName);
+    // Extract username from the session if not provided
+    if (!username) {
+      // Try to extract username from project name pattern
+      // Project names follow pattern: -home-claude-projects-{username}-{project-path}
+      const match = projectName.match(/^-home-claude-projects-([^-]+)-(.+)$/);
+      if (match) {
+        username = match[1];
+      } else {
+        throw new Error('Unable to determine username from project name');
+      }
+    }
+    return await extractProjectDirectory(username, projectName);
   } catch (error) {
     console.error(`Error extracting project directory for ${projectName}:`, error);
-    // Fallback to the old method
+    // Better fallback: reconstruct the full path
+    if (projectName.startsWith('-home-claude-projects-')) {
+      // Remove the leading dash and convert remaining dashes to slashes
+      return projectName.substring(1).replace(/-/g, '/');
+    }
+    // Last resort fallback
     return projectName.replace(/-/g, '/');
   }
 }
@@ -55,7 +71,7 @@ router.get('/status', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     console.log('Git status for project:', project, '-> path:', projectPath);
     
     // Validate git repository
@@ -118,7 +134,7 @@ router.get('/diff', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     
     // Validate git repository
     await validateGitRepository(projectPath);
@@ -162,7 +178,7 @@ router.post('/commit', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     
     // Validate git repository
     await validateGitRepository(projectPath);
@@ -191,7 +207,7 @@ router.get('/branches', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     console.log('Git branches for project:', project, '-> path:', projectPath);
     
     // Validate git repository
@@ -234,7 +250,7 @@ router.post('/checkout', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     
     // Checkout the branch
     const { stdout } = await execAsync(`git checkout "${branch}"`, { cwd: projectPath });
@@ -255,7 +271,7 @@ router.post('/create-branch', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     
     // Create and checkout new branch
     const { stdout } = await execAsync(`git checkout -b "${branch}"`, { cwd: projectPath });
@@ -276,7 +292,7 @@ router.get('/commits', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     
     // Get commit log with stats
     const { stdout } = await execAsync(
@@ -327,7 +343,7 @@ router.get('/commit-diff', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     
     // Get diff for the commit
     const { stdout } = await execAsync(
@@ -351,7 +367,7 @@ router.post('/generate-commit-message', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     
     // Get diff for selected files
     let combinedDiff = '';
@@ -429,7 +445,7 @@ router.get('/remote-status', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     await validateGitRepository(projectPath);
 
     // Get current branch
@@ -500,7 +516,7 @@ router.post('/fetch', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     await validateGitRepository(projectPath);
 
     // Get current branch and its upstream remote
@@ -541,7 +557,7 @@ router.post('/pull', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     await validateGitRepository(projectPath);
 
     // Get current branch and its upstream remote
@@ -608,7 +624,7 @@ router.post('/push', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     await validateGitRepository(projectPath);
 
     // Get current branch and its upstream remote
@@ -678,7 +694,7 @@ router.post('/publish', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     await validateGitRepository(projectPath);
 
     // Get current branch to verify it matches the requested branch
@@ -754,7 +770,7 @@ router.post('/discard', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     await validateGitRepository(projectPath);
 
     // Check file status to determine correct discard command
@@ -793,7 +809,7 @@ router.post('/delete-untracked', async (req, res) => {
   }
 
   try {
-    const projectPath = await getActualProjectPath(project);
+    const projectPath = await getActualProjectPath(project, req.user?.username);
     await validateGitRepository(projectPath);
 
     // Check if file is actually untracked

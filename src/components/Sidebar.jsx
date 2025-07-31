@@ -4,10 +4,11 @@ import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Input } from './ui/input';
 
-import { FolderOpen, Folder, Plus, MessageSquare, Clock, ChevronDown, ChevronRight, Edit3, Check, X, Trash2, Settings, FolderPlus, RefreshCw, Sparkles, Edit2, Star, Search } from 'lucide-react';
+import { FolderOpen, Folder, Plus, MessageSquare, Clock, ChevronDown, ChevronRight, Edit3, Check, X, Trash2, Settings, FolderPlus, RefreshCw, Sparkles, Edit2, Star, Search, Github } from 'lucide-react';
 import { cn } from '../lib/utils';
 import ClaudeLogo from './ClaudeLogo';
 import { api } from '../utils/api';
+import { useAuth } from '../contexts/AuthContext';
 
 // Move formatTimeAgo outside component to avoid recreation on every render
 const formatTimeAgo = (dateString, currentTime) => {
@@ -52,12 +53,22 @@ function Sidebar({
   currentVersion,
   onShowVersionModal
 }) {
+  const { user } = useAuth();
   const [expandedProjects, setExpandedProjects] = useState(new Set());
   const [editingProject, setEditingProject] = useState(null);
   const [showNewProject, setShowNewProject] = useState(false);
   const [editingName, setEditingName] = useState('');
   const [newProjectPath, setNewProjectPath] = useState('');
+  const [gitUrl, setGitUrl] = useState('');
+  const [folderName, setFolderName] = useState('');
+  const [selectedRepo, setSelectedRepo] = useState(null);
+  const [repos, setRepos] = useState([]);
+  const [loadingRepos, setLoadingRepos] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
+  const [projectCreationMode, setProjectCreationMode] = useState('github'); // 'github', 'git', 'local'
+  const [gitUsername, setGitUsername] = useState('');
+  const [gitPassword, setGitPassword] = useState('');
+  const [localProjectPath, setLocalProjectPath] = useState('');
   const [loadingSessions, setLoadingSessions] = useState({});
   const [additionalSessions, setAdditionalSessions] = useState({});
   const [initialSessionsLoaded, setInitialSessionsLoaded] = useState(new Set());
@@ -92,6 +103,23 @@ function Sidebar({
       e.stopPropagation();
       callback();
     };
+  };
+
+  // Load GitHub repos for cloning
+  const loadGithubRepos = async () => {
+    setLoadingRepos(true);
+    try {
+      const response = await api.github.repos();
+      if (response.ok) {
+        const data = await response.json();
+        setRepos(data.repos);
+      }
+    } catch (error) {
+      console.error('Error loading repos:', error);
+      alert('Failed to load GitHub repositories');
+    } finally {
+      setLoadingRepos(false);
+    }
   };
 
   // Auto-update timestamps every minute
@@ -299,18 +327,31 @@ function Sidebar({
     }
   };
 
-  const deleteProject = async (projectName) => {
-    if (!confirm('Are you sure you want to delete this empty project? This action cannot be undone.')) {
+  const deleteProject = async (project) => {
+    const isShared = project.isShared;
+    const confirmMessage = isShared 
+      ? 'Are you sure you want to remove your access to this shared project? You can re-add it later if needed.'
+      : 'Are you sure you want to delete this empty project? This action cannot be undone.';
+    
+    if (!confirm(confirmMessage)) {
       return;
     }
 
     try {
-      const response = await api.deleteProject(projectName);
+      const response = await api.deleteProject(project.name);
 
       if (response.ok) {
+        const result = await response.json();
         // Call parent callback if provided
         if (onProjectDelete) {
-          onProjectDelete(projectName);
+          onProjectDelete(project.name);
+        }
+        
+        // Show different success message based on action
+        if (result.action === 'access_removed') {
+          console.log('Access removed from shared project');
+        } else {
+          console.log('Project deleted successfully');
         }
       } else {
         const error = await response.json();
@@ -324,20 +365,74 @@ function Sidebar({
   };
 
   const createNewProject = async () => {
-    if (!newProjectPath.trim()) {
-      alert('Please enter a project path');
-      return;
-    }
-
     setCreatingProject(true);
     
     try {
-      const response = await api.createProject(newProjectPath.trim());
+      let response;
+      
+      if (projectCreationMode === 'github') {
+        // GitHub OAuth mode
+        if (!selectedRepo) {
+          alert('Please select a repository');
+          return;
+        }
+        if (!folderName.trim()) {
+          alert('Please enter folder name');
+          return;
+        }
+        
+        response = await api.createGitProject({
+          gitUrl: selectedRepo.clone_url,
+          repoFullName: selectedRepo.full_name,
+          folderName: folderName.trim(),
+          useOAuth: true
+        });
+      } else if (projectCreationMode === 'git') {
+        // Git with username/password mode
+        if (!gitUrl.trim()) {
+          alert('Please enter Git repository URL');
+          return;
+        }
+        if (!gitUsername.trim()) {
+          alert('Please enter Git username');
+          return;
+        }
+        if (!gitPassword.trim()) {
+          alert('Please enter Git password');
+          return;
+        }
+        if (!folderName.trim()) {
+          alert('Please enter folder name');
+          return;
+        }
+        
+        response = await api.createGitProject({
+          gitUrl: gitUrl.trim(),
+          gitUsername: gitUsername.trim(),
+          gitPassword: gitPassword.trim(),
+          folderName: folderName.trim(),
+          useOAuth: false
+        });
+      } else if (projectCreationMode === 'local') {
+        // Local directory mode
+        if (!localProjectPath.trim()) {
+          alert('Please enter project directory path');
+          return;
+        }
+        
+        response = await api.createProject(localProjectPath.trim());
+      }
 
       if (response.ok) {
         const result = await response.json();
         setShowNewProject(false);
-        setNewProjectPath('');
+        setSelectedRepo(null);
+        setFolderName('');
+        setRepos([]);
+        setGitUrl('');
+        setGitUsername('');
+        setGitPassword('');
+        setLocalProjectPath('');
         
         // Refresh projects to show the new one
         if (window.refreshProjects) {
@@ -360,6 +455,14 @@ function Sidebar({
   const cancelNewProject = () => {
     setShowNewProject(false);
     setNewProjectPath('');
+    setGitUrl('');
+    setSelectedRepo(null);
+    setFolderName('');
+    setRepos([]);
+    setGitUsername('');
+    setGitPassword('');
+    setLocalProjectPath('');
+    setProjectCreationMode('github');
   };
 
   const loadMoreSessions = async (project) => {
@@ -418,7 +521,7 @@ function Sidebar({
       {/* Header */}
       <div className="md:p-4 md:border-b md:border-border">
         {/* Desktop Header */}
-        <div className="hidden md:flex items-center justify-between">
+        <div className="hidden md:flex items-center justify-between relative">
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center shadow-sm">
               <MessageSquare className="w-4 h-4 text-primary-foreground" />
@@ -459,7 +562,7 @@ function Sidebar({
         </div>
         
         {/* Mobile Header */}
-        <div className="md:hidden p-3 border-b border-border">
+        <div className="md:hidden p-3 border-b border-border relative">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
@@ -501,39 +604,188 @@ function Sidebar({
         <div className="md:p-3 md:border-b md:border-border md:bg-muted/30">
           {/* Desktop Form */}
           <div className="hidden md:block space-y-2">
-            <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <div className="flex items-center gap-2 text-sm font-medium text-foreground mb-2">
               <FolderPlus className="w-4 h-4" />
               Create New Project
             </div>
-            <Input
-              value={newProjectPath}
-              onChange={(e) => setNewProjectPath(e.target.value)}
-              placeholder="/path/to/project or relative/path"
-              className="text-sm focus:ring-2 focus:ring-primary/20"
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') createNewProject();
-                if (e.key === 'Escape') cancelNewProject();
-              }}
-            />
-            <div className="flex gap-2">
-              <Button
-                size="sm"
-                onClick={createNewProject}
-                disabled={!newProjectPath.trim() || creatingProject}
-                className="flex-1 h-8 text-xs hover:bg-primary/90 transition-colors"
+            
+            {/* Tabs for different creation modes */}
+            <div className="flex gap-1 p-1 bg-muted rounded-md">
+              <button
+                className={cn(
+                  "flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors",
+                  projectCreationMode === 'github' 
+                    ? "bg-background text-foreground shadow-sm" 
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                onClick={() => setProjectCreationMode('github')}
               >
-                {creatingProject ? 'Creating...' : 'Create Project'}
-              </Button>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={cancelNewProject}
-                disabled={creatingProject}
-                className="h-8 text-xs hover:bg-accent transition-colors"
+                <Github className="w-3 h-3 inline-block mr-1" />
+                GitHub
+              </button>
+              <button
+                className={cn(
+                  "flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors",
+                  projectCreationMode === 'git' 
+                    ? "bg-background text-foreground shadow-sm" 
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                onClick={() => setProjectCreationMode('git')}
               >
-                Cancel
-              </Button>
+                Git Repo
+              </button>
+              <button
+                className={cn(
+                  "flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors",
+                  projectCreationMode === 'local' 
+                    ? "bg-background text-foreground shadow-sm" 
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                onClick={() => setProjectCreationMode('local')}
+              >
+                Local Dir
+              </button>
+            </div>
+            
+            <div className="space-y-2">
+              {/* GitHub mode */}
+              {projectCreationMode === 'github' && (
+                <>
+                  {!repos.length && !loadingRepos && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={loadGithubRepos}
+                      className="w-full h-8 text-xs"
+                    >
+                      Load Repository List
+                    </Button>
+                  )}
+                  
+                  {loadingRepos && (
+                    <div className="text-center py-4">
+                      <div className="w-6 h-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent mx-auto" />
+                      <p className="text-xs text-muted-foreground mt-2">Loading repositories...</p>
+                    </div>
+                  )}
+                  
+                  {repos.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="max-h-48 overflow-y-auto border border-border rounded-md">
+                        {repos.map(repo => (
+                          <div
+                            key={repo.id}
+                            className={cn(
+                              "p-2 hover:bg-accent cursor-pointer text-xs border-b border-border last:border-b-0",
+                              selectedRepo?.id === repo.id && "bg-accent"
+                            )}
+                            onClick={() => setSelectedRepo(repo)}
+                          >
+                            <div className="font-medium">{repo.name}</div>
+                            {repo.description && (
+                              <div className="text-muted-foreground truncate">{repo.description}</div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  <Input
+                    value={folderName}
+                    onChange={(e) => setFolderName(e.target.value)}
+                    placeholder="Folder name (project will be saved in this folder)"
+                    className="text-sm focus:ring-2 focus:ring-primary/20"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && selectedRepo && folderName) createNewProject();
+                      if (e.key === 'Escape') cancelNewProject();
+                    }}
+                  />
+                </>
+              )}
+              
+              {/* Git with credentials mode */}
+              {projectCreationMode === 'git' && (
+                <>
+                  <Input
+                    value={gitUrl}
+                    onChange={(e) => setGitUrl(e.target.value)}
+                    placeholder="Git repository URL (e.g.: https://gitlab.com/user/repo.git)"
+                    className="text-sm focus:ring-2 focus:ring-primary/20"
+                  />
+                  <Input
+                    value={gitUsername}
+                    onChange={(e) => setGitUsername(e.target.value)}
+                    placeholder="Git username"
+                    className="text-sm focus:ring-2 focus:ring-primary/20"
+                  />
+                  <Input
+                    type="password"
+                    value={gitPassword}
+                    onChange={(e) => setGitPassword(e.target.value)}
+                    placeholder="Git password or access token"
+                    className="text-sm focus:ring-2 focus:ring-primary/20"
+                  />
+                  <Input
+                    value={folderName}
+                    onChange={(e) => setFolderName(e.target.value)}
+                    placeholder="Folder name (project will be saved in this folder)"
+                    className="text-sm focus:ring-2 focus:ring-primary/20"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && gitUrl && gitUsername && gitPassword && folderName) createNewProject();
+                      if (e.key === 'Escape') cancelNewProject();
+                    }}
+                  />
+                </>
+              )}
+              
+              {/* Local directory mode */}
+              {projectCreationMode === 'local' && (
+                <>
+                  <Input
+                    value={localProjectPath}
+                    onChange={(e) => setLocalProjectPath(e.target.value)}
+                    placeholder="Project directory path (e.g.: /home/user/myproject)"
+                    className="text-sm focus:ring-2 focus:ring-primary/20"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && localProjectPath) createNewProject();
+                      if (e.key === 'Escape') cancelNewProject();
+                    }}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Enter the absolute path of an existing project directory on the server
+                  </p>
+                </>
+              )}
+              
+              <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  onClick={createNewProject}
+                  disabled={
+                    creatingProject ||
+                    (projectCreationMode === 'github' && (!selectedRepo || !folderName.trim())) ||
+                    (projectCreationMode === 'git' && (!gitUrl.trim() || !gitUsername.trim() || !gitPassword.trim() || !folderName.trim())) ||
+                    (projectCreationMode === 'local' && !localProjectPath.trim())
+                  }
+                  className="flex-1 h-8 text-xs hover:bg-primary/90 transition-colors"
+                >
+                  {creatingProject ? 'Creating...' : 
+                    projectCreationMode === 'github' ? 'Clone Repository' :
+                    projectCreationMode === 'git' ? 'Clone Repository' :
+                    'Add Project'
+                  }
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={cancelNewProject}
+                  disabled={creatingProject}
+                  className="h-8 text-xs hover:bg-accent transition-colors"
+                >
+                  Cancel
+                </Button>
+              </div>
             </div>
           </div>
           
@@ -546,7 +798,7 @@ function Sidebar({
                     <FolderPlus className="w-3 h-3 text-primary" />
                   </div>
                   <div>
-                    <h2 className="text-base font-semibold text-foreground">New Project</h2>
+                    <h2 className="text-base font-semibold text-foreground">Create New Project</h2>
                   </div>
                 </div>
                 <button
@@ -558,18 +810,138 @@ function Sidebar({
                 </button>
               </div>
               
+              {/* Mobile tabs */}
+              <div className="flex gap-1 p-1 bg-muted rounded-md">
+                <button
+                  className={cn(
+                    "flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors",
+                    projectCreationMode === 'github' 
+                      ? "bg-background text-foreground shadow-sm" 
+                      : "text-muted-foreground"
+                  )}
+                  onClick={() => setProjectCreationMode('github')}
+                >
+                  GitHub
+                </button>
+                <button
+                  className={cn(
+                    "flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors",
+                    projectCreationMode === 'git' 
+                      ? "bg-background text-foreground shadow-sm" 
+                      : "text-muted-foreground"
+                  )}
+                  onClick={() => setProjectCreationMode('git')}
+                >
+                  Git仓库
+                </button>
+                <button
+                  className={cn(
+                    "flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors",
+                    projectCreationMode === 'local' 
+                      ? "bg-background text-foreground shadow-sm" 
+                      : "text-muted-foreground"
+                  )}
+                  onClick={() => setProjectCreationMode('local')}
+                >
+                  本地目录
+                </button>
+              </div>
+              
               <div className="space-y-3">
-                <Input
-                  value={newProjectPath}
-                  onChange={(e) => setNewProjectPath(e.target.value)}
-                  placeholder="/path/to/project or relative/path"
-                  className="text-sm h-10 rounded-md focus:border-primary transition-colors"
-                  autoFocus
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') createNewProject();
-                    if (e.key === 'Escape') cancelNewProject();
-                  }}
-                />
+                {/* GitHub mode */}
+                {projectCreationMode === 'github' && (
+                  <>
+                    {!repos.length && !loadingRepos && (
+                      <Button
+                        variant="outline"
+                        onClick={loadGithubRepos}
+                        className="w-full h-10 text-sm"
+                      >
+                        Load Repository List
+                      </Button>
+                    )}
+                    
+                    {loadingRepos && (
+                      <div className="text-center py-4">
+                        <div className="w-6 h-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent mx-auto" />
+                        <p className="text-xs text-muted-foreground mt-2">Loading repositories...</p>
+                      </div>
+                    )}
+                    
+                    {repos.length > 0 && (
+                      <div className="max-h-48 overflow-y-auto border border-border rounded-md">
+                        {repos.map(repo => (
+                          <div
+                            key={repo.id}
+                            className={cn(
+                              "p-3 active:bg-accent text-sm border-b border-border last:border-b-0",
+                              selectedRepo?.id === repo.id && "bg-accent"
+                            )}
+                            onClick={() => setSelectedRepo(repo)}
+                          >
+                            <div className="font-medium">{repo.name}</div>
+                            {repo.description && (
+                              <div className="text-xs text-muted-foreground truncate">{repo.description}</div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    <Input
+                      value={folderName}
+                      onChange={(e) => setFolderName(e.target.value)}
+                      placeholder="Folder name"
+                      className="text-sm h-10 rounded-md focus:border-primary transition-colors"
+                    />
+                  </>
+                )}
+                
+                {/* Git with credentials mode */}
+                {projectCreationMode === 'git' && (
+                  <>
+                    <Input
+                      value={gitUrl}
+                      onChange={(e) => setGitUrl(e.target.value)}
+                      placeholder="Git repository URL"
+                      className="text-sm h-10 rounded-md focus:border-primary transition-colors"
+                    />
+                    <Input
+                      value={gitUsername}
+                      onChange={(e) => setGitUsername(e.target.value)}
+                      placeholder="Git username"
+                      className="text-sm h-10 rounded-md focus:border-primary transition-colors"
+                    />
+                    <Input
+                      type="password"
+                      value={gitPassword}
+                      onChange={(e) => setGitPassword(e.target.value)}
+                      placeholder="Git password or access token"
+                      className="text-sm h-10 rounded-md focus:border-primary transition-colors"
+                    />
+                    <Input
+                      value={folderName}
+                      onChange={(e) => setFolderName(e.target.value)}
+                      placeholder="Folder name"
+                      className="text-sm h-10 rounded-md focus:border-primary transition-colors"
+                    />
+                  </>
+                )}
+                
+                {/* Local directory mode */}
+                {projectCreationMode === 'local' && (
+                  <>
+                    <Input
+                      value={localProjectPath}
+                      onChange={(e) => setLocalProjectPath(e.target.value)}
+                      placeholder="Project directory path"
+                      className="text-sm h-10 rounded-md focus:border-primary transition-colors"
+                    />
+                    <p className="text-xs text-muted-foreground px-1">
+                      Enter the absolute path of an existing project directory on the server
+                    </p>
+                  </>
+                )}
                 
                 <div className="flex gap-2">
                   <Button
@@ -582,10 +954,19 @@ function Sidebar({
                   </Button>
                   <Button
                     onClick={createNewProject}
-                    disabled={!newProjectPath.trim() || creatingProject}
+                    disabled={
+                      creatingProject ||
+                      (projectCreationMode === 'github' && (!selectedRepo || !folderName.trim())) ||
+                      (projectCreationMode === 'git' && (!gitUrl.trim() || !gitUsername.trim() || !gitPassword.trim() || !folderName.trim())) ||
+                      (projectCreationMode === 'local' && !localProjectPath.trim())
+                    }
                     className="flex-1 h-9 text-sm rounded-md bg-primary hover:bg-primary/90 active:scale-95 transition-all"
                   >
-                    {creatingProject ? 'Creating...' : 'Create'}
+                    {creatingProject ? 'Creating...' : 
+                      projectCreationMode === 'github' ? 'Clone' :
+                      projectCreationMode === 'git' ? 'Clone' :
+                      'Add'
+                    }
                   </Button>
                 </div>
               </div>
@@ -713,8 +1094,13 @@ function Sidebar({
                                 />
                               ) : (
                                 <>
-                                  <h3 className="text-sm font-medium text-foreground truncate">
+                                  <h3 className="text-sm font-medium text-foreground truncate flex items-center gap-2">
                                     {project.displayName}
+                                    {project.isShared && (
+                                      <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded" title="Shared with you">
+                                        Shared
+                                      </span>
+                                    )}
                                   </h3>
                                   <p className="text-xs text-muted-foreground">
                                     {(() => {
@@ -774,14 +1160,15 @@ function Sidebar({
                                       : "text-gray-600 dark:text-gray-400"
                                   )} />
                                 </button>
-                                {getAllSessions(project).length === 0 && (
+                                {(getAllSessions(project).length === 0 || project.isShared) && (
                                   <button
                                     className="w-8 h-8 rounded-lg bg-red-500/10 dark:bg-red-900/30 flex items-center justify-center active:scale-90 border border-red-200 dark:border-red-800"
                                     onClick={(e) => {
                                       e.stopPropagation();
-                                      deleteProject(project.name);
+                                      deleteProject(project);
                                     }}
-                                    onTouchEnd={handleTouchClick(() => deleteProject(project.name))}
+                                    onTouchEnd={handleTouchClick(() => deleteProject(project))}
+                                    title={project.isShared ? "Remove access to shared project" : "Delete empty project"}
                                   >
                                     <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
                                   </button>
@@ -859,8 +1246,13 @@ function Sidebar({
                             </div>
                           ) : (
                             <div>
-                              <div className="text-sm font-semibold truncate text-foreground" title={project.displayName}>
+                              <div className="text-sm font-semibold truncate text-foreground flex items-center gap-2" title={project.displayName}>
                                 {project.displayName}
+                                {project.isShared && (
+                                  <span className="text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-1.5 py-0.5 rounded" title="Shared with you">
+                                    Shared
+                                  </span>
+                                )}
                               </div>
                               <div className="text-xs text-muted-foreground">
                                 {(() => {
@@ -934,14 +1326,14 @@ function Sidebar({
                             >
                               <Edit3 className="w-3 h-3" />
                             </div>
-                            {getAllSessions(project).length === 0 && (
+                            {(getAllSessions(project).length === 0 || project.isShared) && (
                               <div
                                 className="w-6 h-6 opacity-0 group-hover:opacity-100 transition-all duration-200 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center justify-center rounded cursor-pointer touch:opacity-100"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  deleteProject(project.name);
+                                  deleteProject(project);
                                 }}
-                                title="Delete empty project (Delete)"
+                                title={project.isShared ? "Remove access to shared project" : "Delete empty project (Delete)"}
                               >
                                 <Trash2 className="w-3 h-3 text-red-600 dark:text-red-400" />
                               </div>

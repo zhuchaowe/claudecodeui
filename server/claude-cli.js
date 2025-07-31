@@ -2,12 +2,13 @@ import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
+import { projectDb } from './database/db.js';
 
 let activeClaudeProcesses = new Map(); // Track active processes by session ID
 
 async function spawnClaude(command, options = {}, ws) {
   return new Promise(async (resolve, reject) => {
-    const { sessionId, projectPath, cwd, resume, toolsSettings, permissionMode, images } = options;
+    const { sessionId, projectPath, cwd, resume, toolsSettings, permissionMode, images, username } = options;
     let capturedSessionId = sessionId; // Track session ID throughout the process
     let sessionCreatedSent = false; // Track if we've already sent session-created event
     
@@ -267,6 +268,25 @@ async function spawnClaude(command, options = {}, ws) {
             // Send session-created event only once for new sessions
             if (!sessionId && !sessionCreatedSent) {
               sessionCreatedSent = true;
+              
+              // Record project ownership for new sessions
+              if (projectPath && username) {
+                // Extract project name from path (last segment)
+                const projectName = path.basename(projectPath);
+                
+                // Record ownership asynchronously without blocking
+                projectDb.getProjectOwner(projectName).then(existingOwner => {
+                  if (!existingOwner) {
+                    // Record this user as the project owner
+                    return projectDb.createProjectOwnership(projectName, username);
+                  }
+                }).then(() => {
+                  console.log(`📝 Recorded project ownership: ${projectName} -> ${username}`);
+                }).catch(err => {
+                  console.error('Error recording project ownership:', err);
+                });
+              }
+              
               ws.send(JSON.stringify({
                 type: 'session-created',
                 sessionId: capturedSessionId

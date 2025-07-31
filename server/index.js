@@ -24,6 +24,7 @@ try {
 }
 
 console.log('PORT from env:', process.env.PORT);
+console.log('GITHUB_CLIENT_ID from env:', process.env.GITHUB_CLIENT_ID ? 'Set' : 'Not set');
 
 import express from 'express';
 import { WebSocketServer } from 'ws';
@@ -36,30 +37,33 @@ import pty from 'node-pty';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
-import { getProjects, getSessions, getSessionMessages, renameProject, deleteSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache } from './projects.js';
+import { getProjects, getSessions, getSessionMessages, renameProject, deleteSession, deleteProject, removeProjectAccess, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, getUserProjectsDir } from './projects.js';
+import { projectDb } from './database/db.js';
 import { spawnClaude, abortClaudeSession } from './claude-cli.js';
 import gitRoutes from './routes/git.js';
 import authRoutes from './routes/auth.js';
 import mcpRoutes from './routes/mcp.js';
+import githubRoutes from './routes/github.js';
 import { initializeDatabase } from './database/db.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 
-// File system watcher for projects folder
-let projectsWatcher = null;
-const connectedClients = new Set();
+// File system watchers for projects folders (one per user)
+const projectsWatchers = new Map(); // username -> watcher
+const connectedClients = new Map(); // ws -> { username, ... }
 
 // Setup file system watcher for Claude projects folder using chokidar
-async function setupProjectsWatcher() {
+async function setupProjectsWatcher(username) {
   const chokidar = (await import('chokidar')).default;
-  const claudeProjectsPath = path.join(process.env.HOME, '.claude', 'projects');
+  const claudeProjectsPath = getUserProjectsDir(username);
   
-  if (projectsWatcher) {
-    projectsWatcher.close();
+  // Close existing watcher for this user if any
+  if (projectsWatchers.has(username)) {
+    projectsWatchers.get(username).close();
   }
   
   try {
     // Initialize chokidar watcher with optimized settings
-    projectsWatcher = chokidar.watch(claudeProjectsPath, {
+    const watcher = chokidar.watch(claudeProjectsPath, {
       ignored: [
         '**/node_modules/**',
         '**/.git/**',
@@ -89,8 +93,8 @@ async function setupProjectsWatcher() {
           // Clear project directory cache when files change
           clearProjectDirectoryCache();
           
-          // Get updated projects list
-          const updatedProjects = await getProjects();
+          // Get updated projects list for this user
+          const updatedProjects = await getProjects(username);
           
           // Notify all connected clients about the project changes
           const updateMessage = JSON.stringify({
@@ -101,9 +105,10 @@ async function setupProjectsWatcher() {
             changedFile: path.relative(claudeProjectsPath, filePath)
           });
           
-          connectedClients.forEach(client => {
-            if (client.readyState === client.OPEN) {
-              client.send(updateMessage);
+          // Notify only connected clients belonging to this user
+          connectedClients.forEach((clientInfo, ws) => {
+            if (clientInfo.username === username && ws.readyState === ws.OPEN) {
+              ws.send(updateMessage);
             }
           });
           
@@ -114,7 +119,7 @@ async function setupProjectsWatcher() {
     };
     
     // Set up event listeners
-    projectsWatcher
+    watcher
       .on('add', (filePath) => debouncedUpdate('add', filePath))
       .on('change', (filePath) => debouncedUpdate('change', filePath))
       .on('unlink', (filePath) => debouncedUpdate('unlink', filePath))
@@ -126,8 +131,11 @@ async function setupProjectsWatcher() {
       .on('ready', () => {
       });
     
+    // Store the watcher for this user
+    projectsWatchers.set(username, watcher);
+    
   } catch (error) {
-    console.error('❌ Failed to setup projects watcher:', error);
+    console.error(`❌ Failed to setup projects watcher for user ${username}:`, error);
   }
 }
 
@@ -175,6 +183,10 @@ app.use('/api/git', authenticateToken, gitRoutes);
 // MCP API Routes (protected)
 app.use('/api/mcp', authenticateToken, mcpRoutes);
 
+// GitHub API Routes (protected and public callbacks)
+app.use('/api/github', githubRoutes);
+console.log('GitHub routes configured. GITHUB_CLIENT_ID:', process.env.GITHUB_CLIENT_ID ? 'Set' : 'Not set');
+
 // Static files served after API routes
 app.use(express.static(path.join(__dirname, '../dist')));
 
@@ -193,7 +205,7 @@ app.get('/api/config', authenticateToken, (req, res) => {
 
 app.get('/api/projects', authenticateToken, async (req, res) => {
   try {
-    const projects = await getProjects();
+    const projects = await getProjects(req.user.username);
     res.json(projects);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -203,7 +215,7 @@ app.get('/api/projects', authenticateToken, async (req, res) => {
 app.get('/api/projects/:projectName/sessions', authenticateToken, async (req, res) => {
   try {
     const { limit = 5, offset = 0 } = req.query;
-    const result = await getSessions(req.params.projectName, parseInt(limit), parseInt(offset));
+    const result = await getSessions(req.user.username, req.params.projectName, parseInt(limit), parseInt(offset));
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -214,7 +226,7 @@ app.get('/api/projects/:projectName/sessions', authenticateToken, async (req, re
 app.get('/api/projects/:projectName/sessions/:sessionId/messages', authenticateToken, async (req, res) => {
   try {
     const { projectName, sessionId } = req.params;
-    const messages = await getSessionMessages(projectName, sessionId);
+    const messages = await getSessionMessages(req.user.username, projectName, sessionId);
     res.json({ messages });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -225,7 +237,7 @@ app.get('/api/projects/:projectName/sessions/:sessionId/messages', authenticateT
 app.put('/api/projects/:projectName/rename', authenticateToken, async (req, res) => {
   try {
     const { displayName } = req.body;
-    await renameProject(req.params.projectName, displayName);
+    await renameProject(req.user.username, req.params.projectName, displayName);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -236,19 +248,31 @@ app.put('/api/projects/:projectName/rename', authenticateToken, async (req, res)
 app.delete('/api/projects/:projectName/sessions/:sessionId', authenticateToken, async (req, res) => {
   try {
     const { projectName, sessionId } = req.params;
-    await deleteSession(projectName, sessionId);
+    await deleteSession(req.user.username, projectName, sessionId);
     res.json({ success: true });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
 
-// Delete project endpoint (only if empty)
+// Delete project endpoint (or remove access for shared projects)
 app.delete('/api/projects/:projectName', authenticateToken, async (req, res) => {
   try {
     const { projectName } = req.params;
-    await deleteProject(projectName);
-    res.json({ success: true });
+    const username = req.user.username;
+    
+    // Check if user is the owner
+    const projectOwner = await projectDb.getProjectOwner(projectName);
+    
+    if (projectOwner === username || !projectOwner) {
+      // User is the owner or project has no owner - delete the project
+      await deleteProject(username, projectName);
+      res.json({ success: true, action: 'deleted' });
+    } else {
+      // User is not the owner - just remove their access
+      await removeProjectAccess(username, projectName);
+      res.json({ success: true, action: 'access_removed' });
+    }
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -263,10 +287,126 @@ app.post('/api/projects/create', authenticateToken, async (req, res) => {
       return res.status(400).json({ error: 'Project path is required' });
     }
     
-    const project = await addProjectManually(projectPath.trim());
+    const project = await addProjectManually(req.user.username, projectPath.trim());
     res.json({ success: true, project });
   } catch (error) {
     console.error('Error creating project:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Create git project endpoint
+app.post('/api/projects/create-git', authenticateToken, async (req, res) => {
+  try {
+    const { gitUrl, gitUsername, gitPassword, folderName, useOAuth, repoFullName } = req.body;
+    
+    // Validate inputs
+    if (!gitUrl || !gitUrl.trim()) {
+      return res.status(400).json({ error: 'Git repository URL is required' });
+    }
+    if (!folderName || !folderName.trim()) {
+      return res.status(400).json({ error: 'Folder name is required' });
+    }
+    
+    // Import necessary modules
+    const { getUserById } = await import('./database/db.js');
+    
+    let gitUrlWithAuth;
+    
+    if (useOAuth) {
+      // Get user's GitHub token
+      const user = await getUserById(req.user.id);
+      if (!user.github_token) {
+        return res.status(401).json({ error: 'GitHub not connected. Please connect your GitHub account first.' });
+      }
+      
+      // Use OAuth token for authentication
+      gitUrlWithAuth = gitUrl.replace(/^https:\/\/github.com\//, `https://${user.github_token}@github.com/`);
+    } else {
+      // Legacy username/password authentication
+      if (!gitUsername || !gitUsername.trim()) {
+        return res.status(400).json({ error: 'Git username is required' });
+      }
+      if (!gitPassword || !gitPassword.trim()) {
+        return res.status(400).json({ error: 'Git password is required' });
+      }
+      gitUrlWithAuth = gitUrl.replace(/^https:\/\//, `https://${encodeURIComponent(gitUsername)}:${encodeURIComponent(gitPassword)}@`);
+    }
+    
+    // Create projects directory structure
+    const projectsBaseDir = process.env.PROJECTS_DIR || '/home/claude/projects';
+    const userProjectsDir = path.join(projectsBaseDir, req.user.username);
+    const targetDir = path.join(userProjectsDir, folderName.trim());
+    
+    // Check if target directory already exists
+    try {
+      await fsPromises.access(targetDir);
+      return res.status(400).json({ error: `Folder ${folderName} already exists` });
+    } catch (error) {
+      // Directory doesn't exist, which is what we want
+    }
+    
+    // Create the projects directory structure
+    await fsPromises.mkdir(userProjectsDir, { recursive: true });
+    
+    console.log(`Cloning git repository to ${targetDir}...`);
+    
+    // Use spawn to run git clone
+    const { execSync } = await import('child_process');
+    
+    try {
+      execSync(`git clone "${gitUrlWithAuth}" "${targetDir}"`, {
+        encoding: 'utf8',
+        stdio: 'pipe',
+        timeout: 60000 // 60 second timeout
+      });
+      
+      console.log(`Successfully cloned repository to ${targetDir}`);
+      
+      // For cloned projects, we don't need to call addProjectManually
+      // The project will be automatically discovered when the user refreshes the project list
+      // Just create the project ownership
+      await projectDb.createProjectOwnership(folderName, req.user.username);
+      
+      // Return project info directly
+      const project = {
+        name: folderName,
+        path: targetDir,
+        fullPath: targetDir,
+        displayName: folderName,
+        owner: req.user.username,
+        isShared: false,
+        sessions: []
+      };
+      
+      res.json({ success: true, project });
+    } catch (gitError) {
+      // Clean up the directory if clone failed
+      try {
+        await fsPromises.rm(targetDir, { recursive: true, force: true });
+      } catch (cleanupError) {
+        console.error('Error cleaning up failed clone directory:', cleanupError);
+      }
+      
+      console.error('Git clone error:', gitError.message);
+      
+      // Parse git error message for better user feedback
+      let errorMessage = 'Failed to clone repository';
+      if (gitError.message.includes('Authentication failed')) {
+        errorMessage = useOAuth 
+          ? 'Authentication failed. Your GitHub token may have expired. Please reconnect your GitHub account.'
+          : 'Authentication failed. Please check your username and password.';
+      } else if (gitError.message.includes('Repository not found')) {
+        errorMessage = 'Repository not found. Please check the URL.';
+      } else if (gitError.message.includes('timeout')) {
+        errorMessage = 'Clone operation timed out. The repository may be too large.';
+      }
+      
+      return res.status(400).json({ error: errorMessage });
+    }
+    
+  } catch (error) {
+    console.error('Error creating git project:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -402,7 +542,7 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
     // Use extractProjectDirectory to get the actual project path
     let actualPath;
     try {
-      actualPath = await extractProjectDirectory(req.params.projectName);
+      actualPath = await extractProjectDirectory(req.user.username, req.params.projectName);
     } catch (error) {
       console.error('Error extracting project directory:', error);
       // Fallback to simple dash replacement
@@ -430,6 +570,10 @@ wss.on('connection', (ws, request) => {
   const url = request.url;
   console.log('🔗 Client connected to:', url);
   
+  // Get user info from request (set by verifyClient)
+  const user = request.user;
+  ws.user = user; // Store user info on the WebSocket object
+  
   // Parse URL to get pathname without query parameters
   const urlObj = new URL(url, 'http://localhost');
   const pathname = urlObj.pathname;
@@ -446,10 +590,15 @@ wss.on('connection', (ws, request) => {
 
 // Handle chat WebSocket connections
 function handleChatConnection(ws) {
-  console.log('💬 Chat WebSocket connected');
+  console.log('💬 Chat WebSocket connected for user:', ws.user.username);
   
-  // Add to connected clients for project updates
-  connectedClients.add(ws);
+  // Add to connected clients with user info for project updates
+  connectedClients.set(ws, { username: ws.user.username });
+  
+  // Setup projects watcher for this user if not already setup
+  if (!projectsWatchers.has(ws.user.username)) {
+    setupProjectsWatcher(ws.user.username);
+  }
   
   ws.on('message', async (message) => {
     try {
@@ -459,7 +608,14 @@ function handleChatConnection(ws) {
         console.log('💬 User message:', data.command || '[Continue/Resume]');
         console.log('📁 Project:', data.options?.projectPath || 'Unknown');
         console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
-        await spawnClaude(data.command, data.options, ws);
+        
+        // Pass username for project ownership tracking
+        const optionsWithUser = {
+          ...data.options,
+          username: ws.user.username
+        };
+        
+        await spawnClaude(data.command, optionsWithUser, ws);
       } else if (data.type === 'abort-session') {
         console.log('🛑 Abort session request:', data.sessionId);
         const success = abortClaudeSession(data.sessionId);
@@ -479,9 +635,24 @@ function handleChatConnection(ws) {
   });
   
   ws.on('close', () => {
-    console.log('🔌 Chat client disconnected');
+    console.log('🔌 Chat client disconnected for user:', ws.user?.username);
     // Remove from connected clients
     connectedClients.delete(ws);
+    
+    // Check if this was the last connection for this user
+    let hasOtherConnections = false;
+    connectedClients.forEach((clientInfo) => {
+      if (clientInfo.username === ws.user?.username) {
+        hasOtherConnections = true;
+      }
+    });
+    
+    // If no other connections for this user, stop their watcher
+    if (!hasOtherConnections && ws.user?.username && projectsWatchers.has(ws.user.username)) {
+      projectsWatchers.get(ws.user.username).close();
+      projectsWatchers.delete(ws.user.username);
+      console.log(`🛑 Stopped projects watcher for user: ${ws.user.username}`);
+    }
   });
 }
 
@@ -524,12 +695,17 @@ function handleShellConnection(ws) {
           }
           
           // Create shell command that cds to the project directory first
+          // Using bash -l to ensure login shell loads .bashrc/.bash_profile for NVM paths
           const shellCommand = `cd "${projectPath}" && ${claudeCommand}`;
           
           console.log('🔧 Executing shell command:', shellCommand);
           
+          // First check if claude command exists
+          const checkCommand = 'which claude || echo "CLAUDE_NOT_FOUND"';
+          
           // Start shell using PTY for proper terminal emulation
-          shellProcess = pty.spawn('bash', ['-c', shellCommand], {
+          // Use bash -l (login shell) to ensure .bashrc/.bash_profile are loaded
+          shellProcess = pty.spawn('bash', ['-l', '-c', `${checkCommand} && ${shellCommand}`], {
             name: 'xterm-256color',
             cols: 80,
             rows: 24,
@@ -546,10 +722,31 @@ function handleShellConnection(ws) {
           
           console.log('🟢 Shell process started with PTY, PID:', shellProcess.pid);
           
+          // Track if we've seen the claude command check
+          let claudeCheckDone = false;
+          
           // Handle data output
           shellProcess.onData((data) => {
             if (ws.readyState === ws.OPEN) {
               let outputData = data;
+              
+              // Check for claude not found error
+              if (!claudeCheckDone && data.includes('CLAUDE_NOT_FOUND')) {
+                claudeCheckDone = true;
+                console.error('❌ Claude command not found in PATH');
+                ws.send(JSON.stringify({
+                  type: 'output',
+                  data: '\r\n\x1b[31mError: Claude CLI not found. Please ensure Claude CLI is installed and in your PATH.\x1b[0m\r\n'
+                }));
+                shellProcess.kill();
+                return;
+              }
+              
+              // Skip the "which claude" output
+              if (!claudeCheckDone && data.includes('/claude')) {
+                claudeCheckDone = true;
+                return; // Don't send the which output to client
+              }
               
               // Check for various URL opening patterns
               const patterns = [
@@ -813,7 +1010,7 @@ app.post('/api/projects/:projectName/upload-images', authenticateToken, async (r
     // Configure multer for image uploads
     const storage = multer.diskStorage({
       destination: async (req, file, cb) => {
-        const uploadDir = path.join(os.tmpdir(), 'claude-ui-uploads', String(req.user.id));
+        const uploadDir = path.join(os.tmpdir(), 'claude-ui-uploads', req.user.username);
         await fs.mkdir(uploadDir, { recursive: true });
         cb(null, uploadDir);
       },
@@ -990,8 +1187,8 @@ async function startServer() {
     server.listen(PORT, '0.0.0.0', async () => {
       console.log(`Claude Code UI server running on http://0.0.0.0:${PORT}`);
       
-      // Start watching the projects folder for changes
-      await setupProjectsWatcher(); // Re-enabled with better-sqlite3
+      // Projects watchers are now setup per-user when they connect
+      console.log('👀 Projects watchers will be setup per-user on connection');
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error);

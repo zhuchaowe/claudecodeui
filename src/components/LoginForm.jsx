@@ -1,33 +1,52 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { MessageSquare } from 'lucide-react';
+import { MessageSquare, Github } from 'lucide-react';
 
 const LoginForm = () => {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   
   const { login } = useAuth();
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    setError('');
+  // Check for GitHub OAuth callback
+  useEffect(() => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const token = urlParams.get('token');
+    const githubLogin = urlParams.get('github_login');
+    const errorParam = urlParams.get('error');
     
-    if (!username || !password) {
-      setError('Please enter both username and password');
-      return;
+    if (token && githubLogin === 'true') {
+      // Handle successful GitHub login
+      localStorage.setItem('auth-token', token);
+      window.history.replaceState({}, document.title, window.location.pathname);
+      window.location.reload(); // Reload to trigger auth state update
     }
     
+    if (errorParam) {
+      setError('GitHub login failed. Please try again.');
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, []);
+
+  const handleGithubLogin = async () => {
+    setError('');
     setIsLoading(true);
     
-    const result = await login(username, password);
-    
-    if (!result.success) {
-      setError(result.error);
+    try {
+      const response = await fetch('/api/github/oauth/login-url');
+      if (response.ok) {
+        const data = await response.json();
+        window.location.href = data.url;
+      } else {
+        const error = await response.json();
+        setError(error.error || 'Failed to initiate GitHub login');
+        setIsLoading(false);
+      }
+    } catch (error) {
+      console.error('GitHub login error:', error);
+      setError('Failed to connect to GitHub. Please try again.');
+      setIsLoading(false);
     }
-    
-    setIsLoading(false);
   };
 
   return (
@@ -41,66 +60,44 @@ const LoginForm = () => {
                 <MessageSquare className="w-8 h-8 text-primary-foreground" />
               </div>
             </div>
-            <h1 className="text-2xl font-bold text-foreground">Welcome Back</h1>
+            <h1 className="text-2xl font-bold text-foreground">
+              Welcome to Claude Code UI
+            </h1>
             <p className="text-muted-foreground mt-2">
-              Sign in to your Claude Code UI account
+              Sign in with your GitHub account to continue
             </p>
           </div>
 
-          {/* Login Form */}
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label htmlFor="username" className="block text-sm font-medium text-foreground mb-1">
-                Username
-              </label>
-              <input
-                type="text"
-                id="username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="Enter your username"
-                required
-                disabled={isLoading}
-              />
+          {error && (
+            <div className="p-3 bg-red-100 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded-md">
+              <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
             </div>
+          )}
 
-            <div>
-              <label htmlFor="password" className="block text-sm font-medium text-foreground mb-1">
-                Password
-              </label>
-              <input
-                type="password"
-                id="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="w-full px-3 py-2 border border-border rounded-md bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                placeholder="Enter your password"
-                required
-                disabled={isLoading}
-              />
-            </div>
-
-            {error && (
-              <div className="p-3 bg-red-100 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded-md">
-                <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
-              </div>
-            )}
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white font-medium py-2 px-4 rounded-md transition-colors duration-200"
-            >
-              {isLoading ? 'Signing in...' : 'Sign In'}
-            </button>
-          </form>
+          {/* GitHub Login Button */}
+          <button
+            onClick={handleGithubLogin}
+            disabled={isLoading}
+            className="w-full bg-gray-900 hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700 disabled:bg-gray-600 text-white font-medium py-3 px-4 rounded-md transition-colors duration-200 flex items-center justify-center gap-3"
+          >
+            <Github className="w-5 h-5" />
+            {isLoading ? 'Redirecting to GitHub...' : 'Continue with GitHub'}
+          </button>
 
           <div className="text-center">
-            <p className="text-sm text-muted-foreground">
-              Enter your credentials to access Claude Code UI
+            <p className="text-xs text-muted-foreground">
+              By signing in, you agree to authenticate using your GitHub account.
+              We'll use this to manage your projects and sessions.
             </p>
           </div>
+        </div>
+
+        {/* Info Section */}
+        <div className="mt-6 text-center">
+          <p className="text-sm text-muted-foreground">
+            Claude Code UI uses GitHub OAuth for secure authentication.
+            No passwords are stored locally.
+          </p>
         </div>
       </div>
     </div>

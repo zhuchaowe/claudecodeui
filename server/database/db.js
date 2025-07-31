@@ -9,16 +9,78 @@ const __dirname = dirname(__filename);
 
 const DB_PATH = path.join(__dirname, 'auth.db');
 const INIT_SQL_PATH = path.join(__dirname, 'init.sql');
+const PROJECTS_SQL_PATH = path.join(__dirname, 'projects-ownership.sql');
+const SHARED_PROJECTS_SQL_PATH = path.join(__dirname, 'migrate-shared-projects.sql');
 
 // Create database connection
 const db = new Database(DB_PATH);
 console.log('Connected to SQLite database');
+
+// Run migrations immediately on database connection
+// This ensures existing databases get updated columns
+try {
+  // Only run if users table exists (database already initialized)
+  const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
+  if (tableExists) {
+    // We'll run the migration function after it's defined
+    console.log('Checking for required database migrations...');
+  }
+} catch (error) {
+  console.log('Database not yet initialized');
+}
+
+// Check if column exists in table
+const columnExists = (tableName, columnName) => {
+  const result = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  return result.some(col => col.name === columnName);
+};
+
+// Run migrations
+const runMigrations = () => {
+  try {
+    // Check and add GitHub OAuth columns if they don't exist
+    if (!columnExists('users', 'github_token')) {
+      console.log('Adding github_token column to users table...');
+      db.exec('ALTER TABLE users ADD COLUMN github_token TEXT');
+    }
+    
+    if (!columnExists('users', 'github_username')) {
+      console.log('Adding github_username column to users table...');
+      db.exec('ALTER TABLE users ADD COLUMN github_username TEXT');
+    }
+    
+    // Check if project_access table exists, create it if not
+    const projectAccessExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='project_access'").get();
+    if (!projectAccessExists) {
+      console.log('Creating project_access table for shared projects...');
+      const sharedProjectsSQL = fs.readFileSync(SHARED_PROJECTS_SQL_PATH, 'utf8');
+      db.exec(sharedProjectsSQL);
+    }
+    
+    console.log('Migrations completed successfully');
+  } catch (error) {
+    console.error('Error running migrations:', error.message);
+    throw error;
+  }
+};
 
 // Initialize database with schema
 const initializeDatabase = async () => {
   try {
     const initSQL = fs.readFileSync(INIT_SQL_PATH, 'utf8');
     db.exec(initSQL);
+    
+    // Initialize projects ownership table
+    const projectsSQL = fs.readFileSync(PROJECTS_SQL_PATH, 'utf8');
+    db.exec(projectsSQL);
+    
+    // Initialize shared projects table
+    const sharedProjectsSQL = fs.readFileSync(SHARED_PROJECTS_SQL_PATH, 'utf8');
+    db.exec(sharedProjectsSQL);
+    
+    // Run any necessary migrations
+    runMigrations();
+    
     console.log('Database initialized successfully');
   } catch (error) {
     console.error('Error initializing database:', error.message);
@@ -59,6 +121,31 @@ const userDb = {
     }
   },
 
+  // Get user by GitHub username
+  getUserByGithubUsername: (githubUsername) => {
+    try {
+      const row = db.prepare('SELECT * FROM users WHERE github_username = ? AND is_active = 1').get(githubUsername);
+      return row;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Create a new user with GitHub OAuth
+  createUserWithGithub: (username, displayName, email, githubToken, githubUsername) => {
+    try {
+      // No password hash needed for OAuth users
+      const stmt = db.prepare(`
+        INSERT INTO users (username, password_hash, github_token, github_username) 
+        VALUES (?, '', ?, ?)
+      `);
+      const result = stmt.run(username, githubToken, githubUsername);
+      return { id: result.lastInsertRowid, username, github_username: githubUsername };
+    } catch (err) {
+      throw err;
+    }
+  },
+
   // Update last login time
   updateLastLogin: (userId) => {
     try {
@@ -79,8 +166,153 @@ const userDb = {
   }
 };
 
+// Project ownership database operations
+const projectDb = {
+  // Create a project ownership record
+  createProjectOwnership: (projectName, ownerUsername) => {
+    try {
+      const stmt = db.prepare('INSERT INTO project_ownership (project_name, owner_username) VALUES (?, ?)');
+      const result = stmt.run(projectName, ownerUsername);
+      
+      // Also add to project_access table as owner
+      const accessStmt = db.prepare('INSERT OR IGNORE INTO project_access (project_name, username, access_level) VALUES (?, ?, ?)');
+      accessStmt.run(projectName, ownerUsername, 'owner');
+      
+      return { id: result.lastInsertRowid, projectName, ownerUsername };
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Get projects by owner
+  getProjectsByOwner: (ownerUsername) => {
+    try {
+      const rows = db.prepare('SELECT * FROM project_ownership WHERE owner_username = ?').all(ownerUsername);
+      return rows;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Get project owner
+  getProjectOwner: (projectName) => {
+    try {
+      const row = db.prepare('SELECT owner_username FROM project_ownership WHERE project_name = ?').get(projectName);
+      return row?.owner_username;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Delete project ownership record
+  deleteProjectOwnership: (projectName) => {
+    try {
+      db.prepare('DELETE FROM project_ownership WHERE project_name = ?').run(projectName);
+      // Also delete from project_access
+      db.prepare('DELETE FROM project_access WHERE project_name = ?').run(projectName);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Update project name (for rename)
+  updateProjectName: (oldName, newName) => {
+    try {
+      db.prepare('UPDATE project_ownership SET project_name = ? WHERE project_name = ?').run(newName, oldName);
+      // Also update in project_access
+      db.prepare('UPDATE project_access SET project_name = ? WHERE project_name = ?').run(newName, oldName);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Add user access to a project
+  addProjectAccess: (projectName, username, accessLevel = 'user') => {
+    try {
+      const stmt = db.prepare('INSERT OR REPLACE INTO project_access (project_name, username, access_level) VALUES (?, ?, ?)');
+      const result = stmt.run(projectName, username, accessLevel);
+      return { id: result.lastInsertRowid, projectName, username, accessLevel };
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Get all projects a user has access to
+  getProjectsWithAccess: (username) => {
+    try {
+      const rows = db.prepare('SELECT * FROM project_access WHERE username = ?').all(username);
+      return rows;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Check if user has access to project
+  hasProjectAccess: (projectName, username) => {
+    try {
+      const row = db.prepare('SELECT * FROM project_access WHERE project_name = ? AND username = ?').get(projectName, username);
+      return !!row;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Get all users with access to a project
+  getProjectUsers: (projectName) => {
+    try {
+      const rows = db.prepare('SELECT * FROM project_access WHERE project_name = ?').all(projectName);
+      return rows;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Remove user's access to a project
+  removeProjectAccess: (projectName, username) => {
+    try {
+      db.prepare('DELETE FROM project_access WHERE project_name = ? AND username = ?').run(projectName, username);
+      return true;
+    } catch (err) {
+      throw err;
+    }
+  }
+};
+
+// Update user's GitHub token
+const updateUserGithubToken = (userId, githubToken, githubUsername) => {
+  try {
+    const stmt = db.prepare('UPDATE users SET github_token = ?, github_username = ? WHERE id = ?');
+    stmt.run(githubToken, githubUsername, userId);
+  } catch (err) {
+    throw err;
+  }
+};
+
+// Get user by ID with GitHub info
+const getUserById = (userId) => {
+  try {
+    const stmt = db.prepare('SELECT id, username, created_at, last_login, github_token, github_username FROM users WHERE id = ? AND is_active = 1');
+    return stmt.get(userId);
+  } catch (err) {
+    throw err;
+  }
+};
+
+// Run migrations on existing databases immediately
+try {
+  const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
+  if (tableExists) {
+    runMigrations();
+  }
+} catch (error) {
+  console.log('Migration check error:', error.message);
+}
+
 export {
   db,
   initializeDatabase,
-  userDb
+  userDb,
+  projectDb,
+  updateUserGithubToken,
+  getUserById
 };

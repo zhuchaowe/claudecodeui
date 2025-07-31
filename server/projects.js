@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import fsSync from 'fs';
 import path from 'path';
 import readline from 'readline';
+import { projectDb } from './database/db.js';
 
 // Cache for extracted project directories
 const projectDirectoryCache = new Map();
@@ -13,9 +14,22 @@ function clearProjectDirectoryCache() {
   cacheTimestamp = Date.now();
 }
 
+// Get user's projects directory
+function getUserProjectsDir(username) {
+  // Use environment variable for projects directory, default to /home/claude/projects
+  const projectsDir = process.env.PROJECTS_DIR || '/home/claude/projects';
+  return path.join(projectsDir, username);
+}
+
+// Get shared config path (all users share the same config)
+function getUserConfigPath(username) {
+  const homeDir = process.env.HOME || '/home/claude';
+  return path.join(homeDir, '.claude', 'project-config.json');
+}
+
 // Load project configuration file
-async function loadProjectConfig() {
-  const configPath = path.join(process.env.HOME, '.claude', 'project-config.json');
+async function loadProjectConfig(username) {
+  const configPath = getUserConfigPath(username);
   try {
     const configData = await fs.readFile(configPath, 'utf8');
     return JSON.parse(configData);
@@ -26,15 +40,29 @@ async function loadProjectConfig() {
 }
 
 // Save project configuration file
-async function saveProjectConfig(config) {
-  const configPath = path.join(process.env.HOME, '.claude', 'project-config.json');
+async function saveProjectConfig(username, config) {
+  const configPath = getUserConfigPath(username);
+  
+  // Ensure directory exists
+  const configDir = path.dirname(configPath);
+  await fs.mkdir(configDir, { recursive: true });
+  
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
 }
 
 // Generate better display name from path
 async function generateDisplayName(projectName, actualProjectDir = null) {
   // Use actual project directory if provided, otherwise decode from project name
-  let projectPath = actualProjectDir || projectName.replace(/-/g, '/');
+  let projectPath = actualProjectDir;
+  if (!projectPath) {
+    if (projectName.startsWith('-home-claude-projects-')) {
+      projectPath = '/' + projectName.substring(1).replace(/-/g, '/');
+    } else if (projectName.startsWith('/')) {
+      projectPath = projectName;
+    } else {
+      projectPath = projectName.replace(/-/g, '/');
+    }
+  }
   
   // Try to read package.json from the project path
   try {
@@ -66,26 +94,70 @@ async function generateDisplayName(projectName, actualProjectDir = null) {
 }
 
 // Extract the actual project directory from JSONL sessions (with caching)
-async function extractProjectDirectory(projectName) {
+async function extractProjectDirectory(username, projectName) {
   // Check cache first
   if (projectDirectoryCache.has(projectName)) {
     return projectDirectoryCache.get(projectName);
   }
   
+  // Check if this is a local directory project (starts with dash and represents an absolute path)
+  // e.g., -home-claude-claudecodeui represents /home/claude/claudecodeui
+  if (projectName.startsWith('-') && !projectName.startsWith('-home-claude-projects-')) {
+    // This is a local directory project, convert back to absolute path
+    const absolutePath = '/' + projectName.substring(1).replace(/-/g, '/');
+    projectDirectoryCache.set(projectName, absolutePath);
+    return absolutePath;
+  }
   
-  const projectDir = path.join(process.env.HOME, '.claude', 'projects', projectName);
+  // If projectName is a full encoded path like -home-claude-projects-username-project
+  // we need to extract just the project folder name
+  let projectFolderName = projectName;
+  if (projectName.startsWith('-home-claude-projects-')) {
+    // Extract just the project name part (e.g., 'felo-mygpt' from '-home-claude-projects-zhuchao-felo-mygpt')
+    const parts = projectName.split('-');
+    // Skip: '', 'home', 'claude', 'projects', 'username'
+    const usernameIndex = parts.indexOf(username);
+    if (usernameIndex > 0 && usernameIndex < parts.length - 1) {
+      projectFolderName = parts.slice(usernameIndex + 1).join('-');
+    }
+  }
+  
+  const projectDir = path.join(getUserProjectsDir(username), projectFolderName);
   const cwdCounts = new Map();
   let latestTimestamp = 0;
   let latestCwd = null;
   let extractedPath;
   
   try {
-    const files = await fs.readdir(projectDir);
-    const jsonlFiles = files.filter(file => file.endsWith('.jsonl'));
+    // For local directory projects, we might not have a project folder with sessions
+    let files = [];
+    let jsonlFiles = [];
+    
+    try {
+      files = await fs.readdir(projectDir);
+      jsonlFiles = files.filter(file => file.endsWith('.jsonl'));
+    } catch (err) {
+      // Directory doesn't exist - this is expected for local directory projects
+      if (err.code !== 'ENOENT') {
+        throw err;
+      }
+    }
     
     if (jsonlFiles.length === 0) {
       // Fall back to decoded project name if no sessions
-      extractedPath = projectName.replace(/-/g, '/');
+      // Check if this is a local directory project first
+      if (projectName.startsWith('-') && !projectName.startsWith('-home-claude-projects-')) {
+        // Local directory project
+        extractedPath = '/' + projectName.substring(1).replace(/-/g, '/');
+      } else if (projectName.startsWith('-home-claude-projects-')) {
+        // Remove the leading dash and convert to path
+        extractedPath = '/' + projectName.substring(1).replace(/-/g, '/');
+      } else if (projectName.startsWith('/')) {
+        extractedPath = projectName;
+      } else {
+        // Construct the full path
+        extractedPath = path.join(getUserProjectsDir(username), projectFolderName);
+      }
     } else {
       // Process all JSONL files to collect cwd values
       for (const file of jsonlFiles) {
@@ -122,7 +194,16 @@ async function extractProjectDirectory(projectName) {
       // Determine the best cwd to use
       if (cwdCounts.size === 0) {
         // No cwd found, fall back to decoded project name
-        extractedPath = projectName.replace(/-/g, '/');
+        if (projectName.startsWith('-') && !projectName.startsWith('-home-claude-projects-')) {
+          // Local directory project
+          extractedPath = '/' + projectName.substring(1).replace(/-/g, '/');
+        } else if (projectName.startsWith('-home-claude-projects-')) {
+          extractedPath = '/' + projectName.substring(1).replace(/-/g, '/');
+        } else if (projectName.startsWith('/')) {
+          extractedPath = projectName;
+        } else {
+          extractedPath = path.join(getUserProjectsDir(username), projectFolderName);
+        }
       } else if (cwdCounts.size === 1) {
         // Only one cwd, use it
         extractedPath = Array.from(cwdCounts.keys())[0];
@@ -146,7 +227,16 @@ async function extractProjectDirectory(projectName) {
         
         // Fallback (shouldn't reach here)
         if (!extractedPath) {
-          extractedPath = latestCwd || projectName.replace(/-/g, '/');
+          if (projectName.startsWith('-') && !projectName.startsWith('-home-claude-projects-')) {
+            // Local directory project
+            extractedPath = latestCwd || ('/' + projectName.substring(1).replace(/-/g, '/'));
+          } else if (projectName.startsWith('-home-claude-projects-')) {
+            extractedPath = latestCwd || ('/' + projectName.substring(1).replace(/-/g, '/'));
+          } else if (latestCwd) {
+            extractedPath = latestCwd;
+          } else {
+            extractedPath = path.join(getUserProjectsDir(username), projectFolderName);
+          }
         }
       }
     }
@@ -159,7 +249,16 @@ async function extractProjectDirectory(projectName) {
   } catch (error) {
     console.error(`Error extracting project directory for ${projectName}:`, error);
     // Fall back to decoded project name
-    extractedPath = projectName.replace(/-/g, '/');
+    if (projectName.startsWith('-') && !projectName.startsWith('-home-claude-projects-')) {
+      // Local directory project
+      extractedPath = '/' + projectName.substring(1).replace(/-/g, '/');
+    } else if (projectName.startsWith('-home-claude-projects-')) {
+      extractedPath = '/' + projectName.substring(1).replace(/-/g, '/');
+    } else if (projectName.startsWith('/')) {
+      extractedPath = projectName;
+    } else {
+      extractedPath = path.join(getUserProjectsDir(username), projectFolderName);
+    }
     
     // Cache the fallback result too
     projectDirectoryCache.set(projectName, extractedPath);
@@ -168,23 +267,56 @@ async function extractProjectDirectory(projectName) {
   }
 }
 
-async function getProjects() {
-  const claudeDir = path.join(process.env.HOME, '.claude', 'projects');
-  const config = await loadProjectConfig();
+async function getProjects(username) {
+  const claudeDir = getUserProjectsDir(username);
+  const config = await loadProjectConfig(username);
   const projects = [];
   const existingProjects = new Set();
   
+  // Get projects owned by this user
+  const ownedProjects = await projectDb.getProjectsByOwner(username);
+  const ownedProjectNames = new Set(ownedProjects.map(p => p.project_name));
+  
+  // Get all projects this user has access to (including shared)
+  const accessibleProjects = await projectDb.getProjectsWithAccess(username);
+  const accessibleProjectNames = new Set(accessibleProjects.map(p => p.project_name));
+  
   try {
+    // Ensure directory exists
+    await fs.mkdir(claudeDir, { recursive: true });
+    
     // First, get existing projects from the file system
     const entries = await fs.readdir(claudeDir, { withFileTypes: true });
     
     for (const entry of entries) {
       if (entry.isDirectory()) {
         existingProjects.add(entry.name);
+        
+        // Check if this user has access to this project
+        const projectOwner = await projectDb.getProjectOwner(entry.name);
+        const hasAccess = await projectDb.hasProjectAccess(entry.name, username);
+        
+        if (!projectOwner) {
+          // If project has no owner, assign it to the first user who accesses it
+          try {
+            await projectDb.createProjectOwnership(entry.name, username);
+            console.log(`Assigned unowned project ${entry.name} to user ${username}`);
+          } catch (err) {
+            // Another user might have claimed it concurrently
+            const newOwner = await projectDb.getProjectOwner(entry.name);
+            if (newOwner && newOwner !== username && !hasAccess) {
+              continue; // Skip if now owned by another user and no access
+            }
+          }
+        } else if (projectOwner !== username && !hasAccess) {
+          // Skip projects owned by other users that this user doesn't have access to
+          continue;
+        }
+        
         const projectPath = path.join(claudeDir, entry.name);
         
         // Extract actual project directory from JSONL sessions
-        const actualProjectDir = await extractProjectDirectory(entry.name);
+        const actualProjectDir = await extractProjectDirectory(username, entry.name);
         
         // Get display name from config or generate one
         const customName = config[entry.name]?.displayName;
@@ -197,12 +329,15 @@ async function getProjects() {
           displayName: customName || autoDisplayName,
           fullPath: fullPath,
           isCustomName: !!customName,
+          owner: projectOwner || username, // Default to current user if no owner
+          isShared: projectOwner && projectOwner !== username,
+          accessLevel: projectOwner === username ? 'owner' : 'user',
           sessions: []
         };
         
         // Try to get sessions for this project (just first 5 for performance)
         try {
-          const sessionResult = await getSessions(entry.name, 5, 0);
+          const sessionResult = await getSessions(username, entry.name, 5, 0);
           project.sessions = sessionResult.sessions || [];
           project.sessionMeta = {
             hasMore: sessionResult.hasMore,
@@ -227,20 +362,30 @@ async function getProjects() {
       
       if (!actualProjectDir) {
         try {
-          actualProjectDir = await extractProjectDirectory(projectName);
+          actualProjectDir = await extractProjectDirectory(username, projectName);
         } catch (error) {
           // Fall back to decoded project name
-          actualProjectDir = projectName.replace(/-/g, '/');
+          if (projectName.startsWith('-home-claude-projects-')) {
+            actualProjectDir = projectName.substring(1).replace(/-/g, '/');
+          } else {
+            actualProjectDir = projectName.replace(/-/g, '/');
+          }
         }
       }
       
-              const project = {
+      // Get ownership information for manually added projects
+      const projectOwner = await projectDb.getProjectOwner(projectName);
+      
+      const project = {
           name: projectName,
           path: actualProjectDir,
           displayName: projectConfig.displayName || await generateDisplayName(projectName, actualProjectDir),
           fullPath: actualProjectDir,
           isCustomName: !!projectConfig.displayName,
           isManuallyAdded: true,
+          owner: projectOwner || username,
+          isShared: projectOwner && projectOwner !== username,
+          accessLevel: projectOwner === username ? 'owner' : 'user',
           sessions: []
         };
       
@@ -251,8 +396,8 @@ async function getProjects() {
   return projects;
 }
 
-async function getSessions(projectName, limit = 5, offset = 0) {
-  const projectDir = path.join(process.env.HOME, '.claude', 'projects', projectName);
+async function getSessions(username, projectName, limit = 5, offset = 0) {
+  const projectDir = path.join(getUserProjectsDir(username), projectName);
   
   try {
     const files = await fs.readdir(projectDir);
@@ -391,8 +536,8 @@ async function parseJsonlSessions(filePath) {
 }
 
 // Get messages for a specific session
-async function getSessionMessages(projectName, sessionId) {
-  const projectDir = path.join(process.env.HOME, '.claude', 'projects', projectName);
+async function getSessionMessages(username, projectName, sessionId) {
+  const projectDir = path.join(getUserProjectsDir(username), projectName);
   
   try {
     const files = await fs.readdir(projectDir);
@@ -438,8 +583,18 @@ async function getSessionMessages(projectName, sessionId) {
 }
 
 // Rename a project's display name
-async function renameProject(projectName, newDisplayName) {
-  const config = await loadProjectConfig();
+async function renameProject(username, projectName, newDisplayName) {
+  // Check if user has access to this project
+  const projectOwner = await projectDb.getProjectOwner(projectName);
+  const hasAccess = await projectDb.hasProjectAccess(projectName, username);
+  
+  if (!projectOwner || projectOwner === username || hasAccess) {
+    // User has permission to rename (owner, has access, or unowned project)
+  } else {
+    throw new Error('You do not have permission to rename this project');
+  }
+  
+  const config = await loadProjectConfig(username);
   
   if (!newDisplayName || newDisplayName.trim() === '') {
     // Remove custom name if empty, will fall back to auto-generated
@@ -451,13 +606,23 @@ async function renameProject(projectName, newDisplayName) {
     };
   }
   
-  await saveProjectConfig(config);
+  await saveProjectConfig(username, config);
   return true;
 }
 
 // Delete a session from a project
-async function deleteSession(projectName, sessionId) {
-  const projectDir = path.join(process.env.HOME, '.claude', 'projects', projectName);
+async function deleteSession(username, projectName, sessionId) {
+  // Check if user has access to this project
+  const projectOwner = await projectDb.getProjectOwner(projectName);
+  const hasAccess = await projectDb.hasProjectAccess(projectName, username);
+  
+  if (!projectOwner || projectOwner === username || hasAccess) {
+    // User has permission (owner, has access, or unowned project)
+  } else {
+    throw new Error('You do not have permission to delete sessions from this project');
+  }
+  
+  const projectDir = path.join(getUserProjectsDir(username), projectName);
   
   try {
     const files = await fs.readdir(projectDir);
@@ -508,9 +673,9 @@ async function deleteSession(projectName, sessionId) {
 }
 
 // Check if a project is empty (has no sessions)
-async function isProjectEmpty(projectName) {
+async function isProjectEmpty(username, projectName) {
   try {
-    const sessionsResult = await getSessions(projectName, 1, 0);
+    const sessionsResult = await getSessions(username, projectName, 1, 0);
     return sessionsResult.total === 0;
   } catch (error) {
     console.error(`Error checking if project ${projectName} is empty:`, error);
@@ -518,13 +683,43 @@ async function isProjectEmpty(projectName) {
   }
 }
 
+// Remove user's access to a shared project
+async function removeProjectAccess(username, projectName) {
+  const projectOwner = await projectDb.getProjectOwner(projectName);
+  
+  if (!projectOwner) {
+    throw new Error('Project not found');
+  }
+  
+  if (projectOwner === username) {
+    // Owner trying to remove their own project - use deleteProject instead
+    throw new Error('Project owners cannot remove their own access. Use delete project instead.');
+  }
+  
+  // Remove user's access from the database
+  await projectDb.removeProjectAccess(projectName, username);
+  
+  // Remove from user's config
+  const config = await loadProjectConfig(username);
+  delete config[projectName];
+  await saveProjectConfig(username, config);
+  
+  return true;
+}
+
 // Delete an empty project
-async function deleteProject(projectName) {
-  const projectDir = path.join(process.env.HOME, '.claude', 'projects', projectName);
+async function deleteProject(username, projectName) {
+  // Only project owners can delete projects
+  const projectOwner = await projectDb.getProjectOwner(projectName);
+  if (projectOwner && projectOwner !== username) {
+    throw new Error('Only the project owner can delete this project');
+  }
+  
+  const projectDir = path.join(getUserProjectsDir(username), projectName);
   
   try {
     // First check if the project is empty
-    const isEmpty = await isProjectEmpty(projectName);
+    const isEmpty = await isProjectEmpty(username, projectName);
     if (!isEmpty) {
       throw new Error('Cannot delete project with existing sessions');
     }
@@ -532,10 +727,13 @@ async function deleteProject(projectName) {
     // Remove the project directory
     await fs.rm(projectDir, { recursive: true, force: true });
     
+    // Remove from project ownership database
+    await projectDb.deleteProjectOwnership(projectName);
+    
     // Remove from project config
-    const config = await loadProjectConfig();
+    const config = await loadProjectConfig(username);
     delete config[projectName];
-    await saveProjectConfig(config);
+    await saveProjectConfig(username, config);
     
     return true;
   } catch (error) {
@@ -545,7 +743,7 @@ async function deleteProject(projectName) {
 }
 
 // Add a project manually to the config (without creating folders)
-async function addProjectManually(projectPath, displayName = null) {
+async function addProjectManually(username, projectPath, displayName = null) {
   const absolutePath = path.resolve(projectPath);
   
   try {
@@ -558,21 +756,45 @@ async function addProjectManually(projectPath, displayName = null) {
   // Generate project name (encode path for use as directory name)
   const projectName = absolutePath.replace(/\//g, '-');
   
-  // Check if project already exists in config or as a folder
-  const config = await loadProjectConfig();
-  const projectDir = path.join(process.env.HOME, '.claude', 'projects', projectName);
+  // Check if this user already has this project configured
+  const config = await loadProjectConfig(username);
+  
+  if (config[projectName]) {
+    // User already has this project, ensure they have access in the database
+    const existingOwner = await projectDb.getProjectOwner(projectName);
+    
+    // If there's an owner but this user doesn't have access, add access
+    if (existingOwner && existingOwner !== username) {
+      const hasAccess = await projectDb.hasProjectAccess(projectName, username);
+      if (!hasAccess) {
+        await projectDb.addProjectAccess(projectName, username, 'user');
+      }
+    }
+    
+    return {
+      name: projectName,
+      path: absolutePath,
+      fullPath: absolutePath,
+      displayName: config[projectName].displayName || await generateDisplayName(projectName, absolutePath),
+      isManuallyAdded: true,
+      owner: existingOwner || username,
+      isShared: !!existingOwner && existingOwner !== username,
+      sessions: [],
+      alreadyConfigured: true
+    };
+  }
+  
+  // Check if project directory exists (might be shared by another user)
+  const projectDir = path.join(getUserProjectsDir(username), projectName);
+  let projectExists = false;
   
   try {
     await fs.access(projectDir);
-    throw new Error(`Project already exists for path: ${absolutePath}`);
+    projectExists = true;
   } catch (error) {
     if (error.code !== 'ENOENT') {
       throw error;
     }
-  }
-  
-  if (config[projectName]) {
-    throw new Error(`Project already configured for path: ${absolutePath}`);
   }
   
   // Add to config as manually added project
@@ -585,8 +807,18 @@ async function addProjectManually(projectPath, displayName = null) {
     config[projectName].displayName = displayName;
   }
   
-  await saveProjectConfig(config);
+  await saveProjectConfig(username, config);
   
+  // Check if project ownership already exists
+  const existingOwner = await projectDb.getProjectOwner(projectName);
+  
+  if (!existingOwner) {
+    // No owner yet, assign to this user
+    await projectDb.createProjectOwnership(projectName, username);
+  } else {
+    // Project already has an owner, add this user as a shared user
+    await projectDb.addProjectAccess(projectName, username, 'user');
+  }
   
   return {
     name: projectName,
@@ -594,6 +826,8 @@ async function addProjectManually(projectPath, displayName = null) {
     fullPath: absolutePath,
     displayName: displayName || await generateDisplayName(projectName, absolutePath),
     isManuallyAdded: true,
+    owner: existingOwner || username,
+    isShared: !!existingOwner && existingOwner !== username,
     sessions: []
   };
 }
@@ -608,9 +842,11 @@ export {
   deleteSession,
   isProjectEmpty,
   deleteProject,
+  removeProjectAccess,
   addProjectManually,
   loadProjectConfig,
   saveProjectConfig,
   extractProjectDirectory,
-  clearProjectDirectoryCache
+  clearProjectDirectoryCache,
+  getUserProjectsDir
 };

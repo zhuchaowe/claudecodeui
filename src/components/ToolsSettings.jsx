@@ -3,11 +3,13 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { ScrollArea } from './ui/scroll-area';
 import { Badge } from './ui/badge';
-import { X, Plus, Settings, Shield, AlertTriangle, Moon, Sun, Server, Edit3, Trash2, Play, Globe, Terminal, Zap } from 'lucide-react';
+import { X, Plus, Settings, Shield, AlertTriangle, Moon, Sun, Server, Edit3, Trash2, Play, Globe, Terminal, Zap, LogOut, User } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
+import { useAuth } from '../contexts/AuthContext';
 
 function ToolsSettings({ isOpen, onClose }) {
   const { isDarkMode, toggleDarkMode } = useTheme();
+  const { user, logout } = useAuth();
   const [allowedTools, setAllowedTools] = useState([]);
   const [disallowedTools, setDisallowedTools] = useState([]);
   const [newAllowedTool, setNewAllowedTool] = useState('');
@@ -545,6 +547,16 @@ function ToolsSettings({ isOpen, onClose }) {
                 }`}
               >
                 Appearance
+              </button>
+              <button
+                onClick={() => setActiveTab('account')}
+                className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+                  activeTab === 'account'
+                    ? 'border-blue-600 text-blue-600 dark:text-blue-400'
+                    : 'border-transparent text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Account
               </button>
             </div>
           </div>
@@ -1234,8 +1246,64 @@ function ToolsSettings({ isOpen, onClose }) {
             )}
               </div>
             )}
+
+            {/* Account Tab */}
+            {activeTab === 'account' && (
+              <div className="space-y-6 md:space-y-8">
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <User className="w-5 h-5 text-gray-500" />
+                    <h3 className="text-lg font-medium text-foreground">
+                      Account Information
+                    </h3>
+                  </div>
+                  
+                  <div className="bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-gray-200 dark:bg-gray-700 rounded-full flex items-center justify-center">
+                          <User className="w-5 h-5 text-gray-600 dark:text-gray-400" />
+                        </div>
+                        <div>
+                          <div className="text-sm text-muted-foreground">Logged in as</div>
+                          <div className="font-medium text-foreground">{user?.username || 'User'}</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="flex items-center gap-3">
+                    <LogOut className="w-5 h-5 text-red-500" />
+                    <h3 className="text-lg font-medium text-foreground">
+                      Sign Out
+                    </h3>
+                  </div>
+                  
+                  <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                    <p className="text-sm text-red-800 dark:text-red-200 mb-4">
+                      This will sign you out of Claude Code UI and return you to the login screen.
+                    </p>
+                    <Button
+                      onClick={() => {
+                        if (confirm('Are you sure you want to logout?')) {
+                          logout();
+                          onClose();
+                        }
+                      }}
+                      className="w-full sm:w-auto bg-red-600 hover:bg-red-700 text-white"
+                    >
+                      <LogOut className="w-4 h-4 mr-2" />
+                      Logout
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
+
 
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between p-4 md:p-6 border-t border-border flex-shrink-0 gap-3 pb-safe-area-inset-bottom">
           <div className="flex items-center justify-center sm:justify-start gap-2 order-2 sm:order-1">

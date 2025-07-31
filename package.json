@@ -10,7 +10,7 @@
     "client": "vite --host",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "npm run build && npm run server"
+    "start": "npm run build && concurrently --kill-others \"npm run server\" \"npm run preview\""
   },
   "keywords": [
     "claude",

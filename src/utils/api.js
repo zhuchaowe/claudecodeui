@@ -63,6 +63,11 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ path }),
     }),
+  createGitProject: (data) =>
+    authenticatedFetch('/api/projects/create-git', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
   readFile: (projectName, filePath) =>
     authenticatedFetch(`/api/projects/${projectName}/file?filePath=${encodeURIComponent(filePath)}`),
   saveFile: (projectName, filePath, content) =>
@@ -78,4 +83,13 @@ export const api = {
       body: formData,
       headers: {}, // Let browser set Content-Type for FormData
     }),
+  
+  // GitHub OAuth endpoints
+  github: {
+    getOAuthUrl: () => authenticatedFetch('/api/github/oauth/url'),
+    status: () => authenticatedFetch('/api/github/status'),
+    disconnect: () => authenticatedFetch('/api/github/disconnect', { method: 'POST' }),
+    repos: (page = 1, perPage = 30) => 
+      authenticatedFetch(`/api/github/repos?page=${page}&per_page=${perPage}`),
+  }
 };

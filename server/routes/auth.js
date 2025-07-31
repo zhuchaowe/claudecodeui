@@ -19,7 +19,7 @@ router.get('/status', async (req, res) => {
   }
 });
 
-// User registration (setup) - only allowed if no users exist
+// User registration
 router.post('/register', async (req, res) => {
   try {
     const { username, password } = req.body;
@@ -36,12 +36,6 @@ router.post('/register', async (req, res) => {
     // Use a transaction to prevent race conditions
     db.prepare('BEGIN').run();
     try {
-      // Check if users already exist (only allow one user)
-      const hasUsers = userDb.hasUsers();
-      if (hasUsers) {
-        db.prepare('ROLLBACK').run();
-        return res.status(403).json({ error: 'User already exists. This is a single-user system.' });
-      }
       
       // Hash password
       const saltRounds = 12;
