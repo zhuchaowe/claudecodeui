@@ -14,7 +14,7 @@ import { useAuth } from '../contexts/AuthContext';
 const cleanSessionSummary = (summary) => {
   if (!summary || typeof summary !== 'string') return summary;
   
-  // Remove [xxx] pattern at the beginning (including the brackets and content)
+  // Remove any [xxx] pattern at the beginning (including the brackets and content)
   return summary.replace(/^\[[^\]]*\]\s*/g, '').trim() || 'New Session';
 };
 
