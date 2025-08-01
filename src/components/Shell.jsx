@@ -5,6 +5,14 @@ import { ClipboardAddon } from '@xterm/addon-clipboard';
 import { WebglAddon } from '@xterm/addon-webgl';
 import 'xterm/css/xterm.css';
 
+// Helper function to clean session summary by removing [xxx] prefixes
+const cleanSessionSummary = (summary) => {
+  if (!summary || typeof summary !== 'string') return summary;
+  
+  // Remove any [xxx] pattern at the beginning (including the brackets and content)
+  return summary.replace(/^\[[^\]]*\]\s*/g, '').trim() || 'New Session';
+};
+
 // CSS to remove xterm focus outline
 const xtermStyles = `
   .xterm .xterm-screen {
@@ -575,7 +583,7 @@ function Shell({ selectedProject, selectedSession, isActive }) {
             <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-500' : 'bg-red-500'}`} />
             {selectedSession && (
               <span className="text-xs text-blue-300">
-                ({selectedSession.summary.slice(0, 30)}...)
+                ({cleanSessionSummary(selectedSession.summary).slice(0, 30)}...)
               </span>
             )}
             {!selectedSession && (
@@ -631,10 +639,10 @@ function Shell({ selectedProject, selectedSession, isActive }) {
         {/* Connect button when not connected */}
         {isInitialized && !isConnected && !isConnecting && (
           <div className="absolute inset-0 flex items-center justify-center bg-gray-900 bg-opacity-90 p-4">
-            <div className="text-center max-w-sm w-full">
+            <div className="text-center max-w-md w-full">
               <button
                 onClick={connectToShell}
-                className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center space-x-2 text-base font-medium w-full sm:w-auto"
+                className="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors flex items-center justify-center space-x-2 text-base font-medium mx-auto"
                 title="Connect to shell"
               >
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -642,12 +650,16 @@ function Shell({ selectedProject, selectedSession, isActive }) {
                 </svg>
                 <span>Continue in Shell</span>
               </button>
-              <p className="text-gray-400 text-sm mt-3 px-2">
-                {selectedSession ? 
-                  `Resume session: ${selectedSession.summary.slice(0, 50)}...` : 
-                  'Start a new Claude session'
-                }
-              </p>
+              {selectedSession && (
+                <p className="text-gray-400 text-sm mt-3">
+                  Resume session: {cleanSessionSummary(selectedSession.summary).slice(0, 50)}...
+                </p>
+              )}
+              {!selectedSession && (
+                <p className="text-gray-400 text-sm mt-3">
+                  Start a new Claude session
+                </p>
+              )}
             </div>
           </div>
         )}
