@@ -12,10 +12,16 @@ import {
   Brain,
   Sparkles,
   FileText,
-  Languages
+  Languages,
+  Bell,
+  BellOff,
+  Volume2,
+  VolumeX,
+  Mail
 } from 'lucide-react';
 import DarkModeToggle from './DarkModeToggle';
 import { useTheme } from '../contexts/ThemeContext';
+import EmailSettings from './EmailSettings';
 
 const QuickSettingsPanel = ({ 
   isOpen, 
@@ -34,6 +40,18 @@ const QuickSettingsPanel = ({
   const [whisperMode, setWhisperMode] = useState(() => {
     return localStorage.getItem('whisperMode') || 'default';
   });
+  const [language, setLanguage] = useState(() => {
+    return localStorage.getItem('claudeLanguage') || 'auto';
+  });
+  const [notificationsEnabled, setNotificationsEnabled] = useState(() => {
+    const saved = localStorage.getItem('notificationsEnabled');
+    return saved !== null ? JSON.parse(saved) : true;
+  });
+  const [soundEnabled, setSoundEnabled] = useState(() => {
+    const saved = localStorage.getItem('soundEnabled');
+    return saved !== null ? JSON.parse(saved) : true;
+  });
+  const [showEmailSettings, setShowEmailSettings] = useState(false);
   const { isDarkMode } = useTheme();
 
   useEffect(() => {
@@ -143,6 +161,109 @@ const QuickSettingsPanel = ({
                   className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 dark:text-blue-500 focus:ring-blue-500 dark:focus:ring-blue-400 dark:bg-gray-800 dark:checked:bg-blue-600"
                 />
               </label>
+            </div>
+
+            {/* Notification Settings */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">Notifications</h4>
+              
+              <label className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer transition-colors border border-transparent hover:border-gray-300 dark:hover:border-gray-600">
+                <span className="flex items-center gap-2 text-sm text-gray-900 dark:text-white">
+                  {notificationsEnabled ? <Bell className="h-4 w-4 text-gray-600 dark:text-gray-400" /> : <BellOff className="h-4 w-4 text-gray-600 dark:text-gray-400" />}
+                  Browser Notifications
+                </span>
+                <input
+                  type="checkbox"
+                  checked={notificationsEnabled}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    setNotificationsEnabled(enabled);
+                    localStorage.setItem('notificationsEnabled', JSON.stringify(enabled));
+                  }}
+                  className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 dark:text-blue-500 focus:ring-blue-500 dark:focus:ring-blue-400 dark:bg-gray-800 dark:checked:bg-blue-600"
+                />
+              </label>
+
+              <label className="flex items-center justify-between p-3 rounded-lg bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer transition-colors border border-transparent hover:border-gray-300 dark:hover:border-gray-600">
+                <span className="flex items-center gap-2 text-sm text-gray-900 dark:text-white">
+                  {soundEnabled ? <Volume2 className="h-4 w-4 text-gray-600 dark:text-gray-400" /> : <VolumeX className="h-4 w-4 text-gray-600 dark:text-gray-400" />}
+                  Sound Alerts
+                </span>
+                <input
+                  type="checkbox"
+                  checked={soundEnabled}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    setSoundEnabled(enabled);
+                    localStorage.setItem('soundEnabled', JSON.stringify(enabled));
+                  }}
+                  className="h-4 w-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 dark:text-blue-500 focus:ring-blue-500 dark:focus:ring-blue-400 dark:bg-gray-800 dark:checked:bg-blue-600"
+                />
+              </label>
+              
+              {/* 测试通知按钮 */}
+              <button
+                onClick={() => {
+                  import('../utils/notificationService').then(({ default: notificationService }) => {
+                    notificationService.sendNotification({
+                      title: 'Claude Code',
+                      message: 'Test Notification',
+                      body: 'This is a test notification',
+                      type: 'info',
+                      onlyWhenHidden: false
+                    });
+                  });
+                }}
+                className="w-full p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20 hover:bg-blue-100 dark:hover:bg-blue-900/30 text-blue-700 dark:text-blue-300 font-medium transition-colors border border-blue-200 dark:border-blue-800"
+              >
+                Test Notification
+              </button>
+              
+              {/* 邮件设置按钮 */}
+              <button
+                onClick={() => setShowEmailSettings(true)}
+                className="w-full p-3 rounded-lg bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-300 font-medium transition-colors border border-gray-200 dark:border-gray-700 flex items-center justify-center gap-2"
+              >
+                <Mail className="h-4 w-4" />
+                Email Notification Settings
+              </button>
+            </div>
+
+            {/* Language Settings */}
+            <div className="space-y-2">
+              <h4 className="text-xs font-semibold uppercase tracking-wider text-gray-500 dark:text-gray-400 mb-2">Language</h4>
+              
+              <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors border border-transparent hover:border-gray-300 dark:hover:border-gray-600">
+                <label className="block text-sm text-gray-900 dark:text-white mb-2">
+                  <span className="flex items-center gap-2">
+                    <Languages className="h-4 w-4 text-gray-600 dark:text-gray-400" />
+                    Claude Response Language
+                  </span>
+                </label>
+                <select
+                  value={language}
+                  onChange={(e) => {
+                    setLanguage(e.target.value);
+                    localStorage.setItem('claudeLanguage', e.target.value);
+                    window.dispatchEvent(new Event('languageChanged'));
+                  }}
+                  className="w-full px-3 py-2 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400 focus:border-transparent"
+                >
+                  <option value="auto">Auto-detect</option>
+                  <option value="zh-CN">中文 (Chinese)</option>
+                  <option value="en-US">English</option>
+                  <option value="ja">日本語 (Japanese)</option>
+                  <option value="ko">한국어 (Korean)</option>
+                  <option value="es">Español (Spanish)</option>
+                  <option value="fr">Français (French)</option>
+                  <option value="de">Deutsch (German)</option>
+                  <option value="pt">Português (Portuguese)</option>
+                  <option value="ru">Русский (Russian)</option>
+                </select>
+                <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
+                  Select the language for Claude's responses. Auto-detect will use the language of your messages.
+                </p>
+              </div>
             </div>
 
             {/* Input Settings */}
@@ -255,6 +376,12 @@ const QuickSettingsPanel = ({
           onClick={handleToggle}
         />
       )}
+      
+      {/* 邮件设置模态框 */}
+      <EmailSettings
+        isOpen={showEmailSettings}
+        onClose={() => setShowEmailSettings(false)}
+      />
     </>
   );
 };

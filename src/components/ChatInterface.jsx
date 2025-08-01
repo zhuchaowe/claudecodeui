@@ -22,10 +22,12 @@ import { useDropzone } from 'react-dropzone';
 import TodoList from './TodoList';
 import FloatingTodoList from './FloatingTodoList';
 import ClaudeLogo from './ClaudeLogo.jsx';
+import CollapsibleJson from './CollapsibleJson.jsx';
 
 import ClaudeStatus from './ClaudeStatus';
 import { MicButton } from './MicButton.jsx';
 import { api } from '../utils/api';
+import notificationService from '../utils/notificationService';
 
 // Safe localStorage utility to handle quota exceeded errors
 const safeLocalStorage = {
@@ -111,6 +113,27 @@ const safeLocalStorage = {
 
 // Memoized message component to prevent unnecessary re-renders
 const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFileOpen, onShowSettings, autoExpandTools, showRawParameters }) => {
+  // Helper function to render message content with JSON detection
+  const renderMessageContent = (content) => {
+    if (!content || typeof content !== 'string') return content;
+    
+    // Check if the entire content looks like JSON
+    const trimmed = content.trim();
+    const isJsonLike = (trimmed.startsWith('{') && trimmed.endsWith('}')) || 
+                       (trimmed.startsWith('[') && trimmed.endsWith(']'));
+    
+    if (isJsonLike) {
+      try {
+        JSON.parse(trimmed);
+        return <CollapsibleJson content={content} />;
+      } catch {
+        // If parsing fails, return original content
+      }
+    }
+    
+    return content;
+  };
+
   // Improved grouping logic: Group consecutive assistant messages together
   // Only show avatar/nickname for the first assistant message after a user message
   const isGrouped = prevMessage && 
@@ -878,7 +901,7 @@ const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFile
                                     }
                                   }}
                                 >
-                                  {content}
+                                  {renderMessageContent(content)}
                                 </ReactMarkdown>
                               </div>
                             </details>
@@ -887,7 +910,7 @@ const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFile
                         
                         return (
                           <div className="prose prose-sm max-w-none prose-green dark:prose-invert">
-                            <ReactMarkdown>{content}</ReactMarkdown>
+                            <ReactMarkdown>{renderMessageContent(content)}</ReactMarkdown>
                           </div>
                         );
                       })()}
@@ -1094,12 +1117,12 @@ const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFile
                         )
                       }}
                     >
-                      {String(message.content || '')}
+                      {renderMessageContent(String(message.content || ''))}
                     </ReactMarkdown>
                   </div>
                 ) : (
                   <div className="whitespace-pre-wrap">
-                    {message.content}
+                    {renderMessageContent(message.content)}
                   </div>
                 )}
               </div>
@@ -1747,6 +1770,17 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
           setCanAbortSession(false);
           setClaudeStatus(null);
 
+          // 发送通知 - Claude 完成回复
+          console.log('ChatInterface: Sending notification for claude-complete');
+          notificationService.sendNotification({
+            title: 'Claude Code',
+            message: 'Claude has completed the response',
+            body: 'Claude has completed your request. You can now view the results',
+            type: 'success',
+            onlyWhenHidden: false,  // 修改为false，始终显示通知
+            projectName: selectedProject?.displayName || selectedProject?.name,
+            sessionId: currentSessionId || sessionStorage.getItem('pendingSessionId')
+          });
           
           // Session Protection: Mark session as inactive to re-enable automatic project updates
           // Conversation is complete, safe to allow project updates again
@@ -2182,6 +2216,9 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
     };
 
     const toolsSettings = getToolsSettings();
+    
+    // Get language preference from localStorage
+    const language = localStorage.getItem('claudeLanguage') || 'auto';
 
     // Send command to Claude CLI via WebSocket with images
     sendMessage({
@@ -2194,7 +2231,8 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
         resume: !!currentSessionId,
         toolsSettings: toolsSettings,
         permissionMode: permissionMode,
-        images: uploadedImages // Pass images to backend
+        images: uploadedImages, // Pass images to backend
+        language: language // Pass language preference
       }
     });
 

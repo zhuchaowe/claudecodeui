@@ -25,6 +25,9 @@ try {
 
 console.log('PORT from env:', process.env.PORT);
 console.log('GITHUB_CLIENT_ID from env:', process.env.GITHUB_CLIENT_ID ? 'Set' : 'Not set');
+console.log('SMTP_HOST from env:', process.env.SMTP_HOST ? 'Set' : 'Not set');
+console.log('SMTP_USER from env:', process.env.SMTP_USER ? 'Set' : 'Not set');
+console.log('SMTP_PASS from env:', process.env.SMTP_PASS ? 'Set' : 'Not set');
 
 import express from 'express';
 import { WebSocketServer } from 'ws';
@@ -44,6 +47,8 @@ import gitRoutes from './routes/git.js';
 import authRoutes from './routes/auth.js';
 import mcpRoutes from './routes/mcp.js';
 import githubRoutes from './routes/github.js';
+import emailRoutes from './routes/email.js';
+import emailService from './services/emailService.js';
 import { initializeDatabase } from './database/db.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
 
@@ -203,6 +208,9 @@ app.use('/api/mcp', authenticateToken, mcpRoutes);
 // GitHub API Routes (protected and public callbacks)
 app.use('/api/github', githubRoutes);
 console.log('GitHub routes configured. GITHUB_CLIENT_ID:', process.env.GITHUB_CLIENT_ID ? 'Set' : 'Not set');
+
+// Email API Routes (protected)
+app.use('/api/email', emailRoutes);
 
 // Static files served after API routes
 app.use(express.static(path.join(__dirname, '../dist')));
@@ -1319,6 +1327,10 @@ async function startServer() {
     
     server.listen(PORT, '0.0.0.0', async () => {
       console.log(`Claude Code UI server running on http://0.0.0.0:${PORT}`);
+      
+      // Initialize email service after server starts
+      console.log('Initializing email service...');
+      emailService.initializeTransporter();
       
       // Projects watchers are now setup per-user when they connect
       console.log('👀 Projects watchers will be setup per-user on connection');

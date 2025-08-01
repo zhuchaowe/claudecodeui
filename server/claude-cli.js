@@ -9,7 +9,7 @@ let activeClaudeProcesses = new Map(); // Track active processes by session ID
 
 async function spawnClaude(command, options = {}, ws) {
   return new Promise(async (resolve, reject) => {
-    const { sessionId, projectPath, cwd, resume, toolsSettings, permissionMode, images, username } = options;
+    const { sessionId, projectPath, cwd, resume, toolsSettings, permissionMode, images, username, language } = options;
     let capturedSessionId = sessionId; // Track session ID throughout the process
     let sessionCreatedSent = false; // Track if we've already sent session-created event
     
@@ -23,9 +23,32 @@ async function spawnClaude(command, options = {}, ws) {
     // Build Claude CLI command - start with print/resume flags first
     const args = [];
     
+    // Handle language preference by prepending system instruction
+    let finalCommand = command;
+    if (language && language !== 'auto' && command && command.trim()) {
+      const languageInstructions = {
+        'zh-CN': '中文回答',
+        'en-US': 'English answer',
+        'ja': '日本語で回答',
+        'ko': '한국어로 답변',
+        'es': 'Respuesta en español',
+        'fr': 'Réponse en français',
+        'de': 'Antwort auf Deutsch',
+        'pt': 'Resposta em português',
+        'ru': 'Ответ на русском'
+      };
+      
+      const instruction = languageInstructions[language];
+      if (instruction) {
+        // Prepend language instruction to the command
+        finalCommand = `[${instruction}]\n\n${command}`;
+        console.log(`🌐 Language preference set to: ${language}`);
+      }
+    }
+    
     // Add print flag with command if we have a command
-    if (command && command.trim()) {
-      args.push('--print', command);
+    if (finalCommand && finalCommand.trim()) {
+      args.push('--print', finalCommand);
     }
     
     // Use cwd (actual project directory) instead of projectPath (Claude's metadata directory)
@@ -61,13 +84,13 @@ async function spawnClaude(command, options = {}, ws) {
         
         // Include the full image paths in the prompt for Claude to reference
         // Only modify the command if we actually have images and a command
-        if (tempImagePaths.length > 0 && command && command.trim()) {
+        if (tempImagePaths.length > 0 && finalCommand && finalCommand.trim()) {
           const imageNote = `\n\n[Images provided at the following paths:]\n${tempImagePaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}`;
-          const modifiedCommand = command + imageNote;
+          const modifiedCommand = finalCommand + imageNote;
           
           // Update the command in args
           const printIndex = args.indexOf('--print');
-          if (printIndex !== -1 && args[printIndex + 1] === command) {
+          if (printIndex !== -1 && args[printIndex + 1] === finalCommand) {
             args[printIndex + 1] = modifiedCommand;
           }
         }
@@ -380,11 +403,32 @@ async function spawnClaude(command, options = {}, ws) {
     });
     
     // Handle stdin for interactive mode
-    if (command) {
+    if (finalCommand) {
       // For --print mode with arguments, we don't need to write to stdin
       claudeProcess.stdin.end();
     } else {
-      // For interactive mode, we need to write the command to stdin if provided later
+      // For interactive mode, handle language preference for resume sessions
+      if (resume && language && language !== 'auto') {
+        const languageInstructions = {
+          'zh-CN': '中文回答',
+          'en-US': 'English answer',
+          'ja': '日本語で回答',
+          'ko': '한국어로 답변',
+          'es': 'Respuesta en español',
+          'fr': 'Réponse en français',
+          'de': 'Antwort auf Deutsch',
+          'pt': 'Resposta em português',
+          'ru': 'Ответ на русском'
+        };
+        
+        const instruction = languageInstructions[language];
+        if (instruction) {
+          // For resume sessions, send language instruction as first message
+          claudeProcess.stdin.write(`[${instruction}]\n\n`);
+          console.log(`🌐 Resume session: Language preference set to: ${language}`);
+        }
+      }
+      
       // Keep stdin open for interactive session
       if (command !== undefined) {
         claudeProcess.stdin.write(command + '\n');

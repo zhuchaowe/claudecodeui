@@ -10,6 +10,14 @@ import ClaudeLogo from './ClaudeLogo';
 import { api } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
 
+// Helper function to clean session summary by removing [xxx] prefixes
+const cleanSessionSummary = (summary) => {
+  if (!summary || typeof summary !== 'string') return summary;
+  
+  // Remove [xxx] pattern at the beginning (including the brackets and content)
+  return summary.replace(/^\[[^\]]*\]\s*/g, '').trim() || 'New Session';
+};
+
 // Move formatTimeAgo outside component to avoid recreation on every render
 const formatTimeAgo = (dateString, currentTime) => {
   const date = new Date(dateString);
@@ -1435,7 +1443,7 @@ function Sidebar({
                                   </div>
                                   <div className="min-w-0 flex-1">
                                     <div className="text-xs font-medium truncate text-foreground">
-                                      {session.summary || 'New Session'}
+                                      {cleanSessionSummary(session.summary)}
                                     </div>
                                     <div className="flex items-center gap-1 mt-0.5">
                                       <Clock className="w-2.5 h-2.5 text-muted-foreground" />
@@ -1479,7 +1487,7 @@ function Sidebar({
                                   <MessageSquare className="w-3 h-3 text-muted-foreground mt-0.5 flex-shrink-0" />
                                   <div className="min-w-0 flex-1">
                                     <div className="text-xs font-medium truncate text-foreground">
-                                      {session.summary || 'New Session'}
+                                      {cleanSessionSummary(session.summary)}
                                     </div>
                                     <div className="flex items-center gap-1 mt-0.5">
                                       <Clock className="w-2.5 h-2.5 text-muted-foreground" />
@@ -1562,7 +1570,7 @@ function Sidebar({
                                       onClick={(e) => {
                                         e.stopPropagation();
                                         setEditingSession(session.id);
-                                        setEditingSessionName(session.summary || 'New Session');
+                                        setEditingSessionName(cleanSessionSummary(session.summary));
                                       }}
                                       title="Manually edit session name"
                                     >
