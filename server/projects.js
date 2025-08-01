@@ -14,9 +14,15 @@ function clearProjectDirectoryCache() {
   cacheTimestamp = Date.now();
 }
 
-// Get user's projects directory
+// Get session storage directory (where claude stores session logs)
+function getSessionStorageDir() {
+  // Session logs are always stored in ~/.claude/projects
+  return path.join(process.env.HOME, '.claude/projects');
+}
+
+// Get user's projects directory (for backward compatibility with multi-user mode)
 function getUserProjectsDir(username) {
-  // Use environment variable for projects directory, default to /home/claude/projects
+  // For actual project paths, check if we should use multi-user mode
   const projectsDir = process.env.PROJECTS_DIR || '/home/claude/projects';
   return path.join(projectsDir, username);
 }
@@ -268,7 +274,9 @@ async function extractProjectDirectory(username, projectName) {
 }
 
 async function getProjects(username) {
-  const claudeDir = getUserProjectsDir(username);
+  // Use session storage directory for reading project sessions
+  const claudeDir = getSessionStorageDir();
+  console.log(`[DEBUG] Getting projects for user: ${username}, from session directory: ${claudeDir}`);
   const config = await loadProjectConfig(username);
   const projects = [];
   const existingProjects = new Set();
@@ -287,6 +295,7 @@ async function getProjects(username) {
     
     // First, get existing projects from the file system
     const entries = await fs.readdir(claudeDir, { withFileTypes: true });
+    console.log(`[DEBUG] Found ${entries.length} entries in ${claudeDir}`);
     
     for (const entry of entries) {
       if (entry.isDirectory()) {
@@ -389,6 +398,18 @@ async function getProjects(username) {
           sessions: []
         };
       
+      // Try to get sessions for manually added projects too
+      try {
+        const sessionResult = await getSessions(username, projectName, 5, 0);
+        project.sessions = sessionResult.sessions || [];
+        project.sessionMeta = {
+          hasMore: sessionResult.hasMore,
+          total: sessionResult.total
+        };
+      } catch (e) {
+        console.warn(`Could not load sessions for manually added project ${projectName}:`, e.message);
+      }
+      
       projects.push(project);
     }
   }
@@ -397,11 +418,14 @@ async function getProjects(username) {
 }
 
 async function getSessions(username, projectName, limit = 5, offset = 0) {
-  const projectDir = path.join(getUserProjectsDir(username), projectName);
+  // Use session storage directory for reading session files
+  const projectDir = path.join(getSessionStorageDir(), projectName);
+  console.log(`[DEBUG] getSessions: Looking for sessions in ${projectDir}`);
   
   try {
     const files = await fs.readdir(projectDir);
     const jsonlFiles = files.filter(file => file.endsWith('.jsonl'));
+    console.log(`[DEBUG] getSessions: Found ${jsonlFiles.length} JSONL files`);
     
     if (jsonlFiles.length === 0) {
       return { sessions: [], hasMore: false, total: 0 };
@@ -537,7 +561,7 @@ async function parseJsonlSessions(filePath) {
 
 // Get messages for a specific session
 async function getSessionMessages(username, projectName, sessionId) {
-  const projectDir = path.join(getUserProjectsDir(username), projectName);
+  const projectDir = path.join(getSessionStorageDir(), projectName);
   
   try {
     const files = await fs.readdir(projectDir);
@@ -622,7 +646,7 @@ async function deleteSession(username, projectName, sessionId) {
     throw new Error('You do not have permission to delete sessions from this project');
   }
   
-  const projectDir = path.join(getUserProjectsDir(username), projectName);
+  const projectDir = path.join(getSessionStorageDir(), projectName);
   
   try {
     const files = await fs.readdir(projectDir);
@@ -707,7 +731,7 @@ async function removeProjectAccess(username, projectName) {
   return true;
 }
 
-// Delete an empty project
+// Delete a project and all its sessions
 async function deleteProject(username, projectName) {
   // Only project owners can delete projects
   const projectOwner = await projectDb.getProjectOwner(projectName);
@@ -715,17 +739,27 @@ async function deleteProject(username, projectName) {
     throw new Error('Only the project owner can delete this project');
   }
   
-  const projectDir = path.join(getUserProjectsDir(username), projectName);
+  const sessionDir = path.join(getSessionStorageDir(), projectName);
   
   try {
-    // First check if the project is empty
-    const isEmpty = await isProjectEmpty(username, projectName);
-    if (!isEmpty) {
-      throw new Error('Cannot delete project with existing sessions');
-    }
+    // Remove the session directory (in ~/.claude/projects)
+    await fs.rm(sessionDir, { recursive: true, force: true });
     
-    // Remove the project directory
-    await fs.rm(projectDir, { recursive: true, force: true });
+    // Also try to remove the actual project directory if it exists
+    // Extract the actual project directory path
+    const actualProjectDir = await extractProjectDirectory(username, projectName);
+    if (actualProjectDir && actualProjectDir !== sessionDir) {
+      try {
+        // Only delete if it's under the user's projects directory
+        const userProjectsDir = getUserProjectsDir(username);
+        if (actualProjectDir.startsWith(userProjectsDir)) {
+          await fs.rm(actualProjectDir, { recursive: true, force: true });
+        }
+      } catch (err) {
+        // It's okay if we can't delete the actual project directory
+        console.warn(`Could not delete actual project directory ${actualProjectDir}:`, err.message);
+      }
+    }
     
     // Remove from project ownership database
     await projectDb.deleteProjectOwnership(projectName);
@@ -785,7 +819,7 @@ async function addProjectManually(username, projectPath, displayName = null) {
   }
   
   // Check if project directory exists (might be shared by another user)
-  const projectDir = path.join(getUserProjectsDir(username), projectName);
+  const projectDir = path.join(getSessionStorageDir(), projectName);
   let projectExists = false;
   
   try {
@@ -848,5 +882,6 @@ export {
   saveProjectConfig,
   extractProjectDirectory,
   clearProjectDirectoryCache,
-  getUserProjectsDir
+  getUserProjectsDir,
+  getSessionStorageDir
 };

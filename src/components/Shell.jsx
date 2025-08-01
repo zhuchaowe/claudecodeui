@@ -42,9 +42,20 @@ function Shell({ selectedProject, selectedSession, isActive }) {
 
   // Connect to shell function
   const connectToShell = () => {
-    if (!isInitialized || isConnected || isConnecting) return;
+    console.log('[Shell] Connect button clicked', {
+      isInitialized,
+      isConnected,
+      isConnecting,
+      selectedProject: selectedProject?.name
+    });
+    
+    if (!isInitialized || isConnected || isConnecting) {
+      console.log('[Shell] Connection blocked:', { isInitialized, isConnected, isConnecting });
+      return;
+    }
     
     setIsConnecting(true);
+    console.log('[Shell] Starting WebSocket connection...');
     
     // Start the WebSocket connection
     connectWebSocket();
@@ -379,47 +390,70 @@ function Shell({ selectedProject, selectedSession, isActive }) {
 
   // WebSocket connection function (called manually)
   const connectWebSocket = async () => {
-    if (isConnecting || isConnected) return;
+    console.log('[Shell] connectWebSocket called', { isConnecting, isConnected });
+    
+    if (isConnecting || isConnected) {
+      console.log('[Shell] Already connecting or connected, returning');
+      return;
+    }
     
     try {
       // Get authentication token
       const token = localStorage.getItem('auth-token');
+      console.log('[Shell] Auth token:', token ? 'Found' : 'Not found');
+      
       if (!token) {
-        console.error('No authentication token found for Shell WebSocket connection');
+        console.error('[Shell] No authentication token found for Shell WebSocket connection');
+        setIsConnecting(false);
         return;
       }
       
       // Fetch server configuration to get the correct WebSocket URL
       let wsBaseUrl;
       try {
+        console.log('[Shell] Fetching server config...');
         const configResponse = await fetch('/api/config', {
           headers: {
             'Authorization': `Bearer ${token}`
           }
         });
+        
+        if (!configResponse.ok) {
+          console.error('[Shell] Config fetch failed:', configResponse.status, configResponse.statusText);
+          throw new Error(`Config fetch failed: ${configResponse.status}`);
+        }
+        
         const config = await configResponse.json();
         wsBaseUrl = config.wsUrl;
+        console.log('[Shell] Config received, wsUrl:', wsBaseUrl);
         
-        // If the config returns localhost but we're not on localhost, use current host but with API server port
+        // If the config returns localhost but we're not on localhost, use current host with correct port
         if (wsBaseUrl.includes('localhost') && !window.location.hostname.includes('localhost')) {
           const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-          // For development, API server is typically on port 3002 when Vite is on 3001
-          const apiPort = window.location.port === '3001' ? '3002' : window.location.port;
+          // Extract port from the original wsBaseUrl (which should be the API server port)
+          const wsUrlParts = wsBaseUrl.match(/:(\d+)/);
+          const apiPort = wsUrlParts ? wsUrlParts[1] : '3008';
           wsBaseUrl = `${protocol}//${window.location.hostname}:${apiPort}`;
+          console.log('[Shell] Adjusted wsBaseUrl for non-localhost access:', wsBaseUrl);
         }
       } catch (error) {
+        console.error('[Shell] Config fetch error:', error);
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        // For development, API server is typically on port 3002 when Vite is on 3001
-        const apiPort = window.location.port === '3001' ? '3002' : window.location.port;
+        // Use the same port as the API server (from current page)
+        const apiPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
         wsBaseUrl = `${protocol}//${window.location.hostname}:${apiPort}`;
+        console.log('[Shell] Using fallback wsBaseUrl:', wsBaseUrl);
       }
       
       // Include token in WebSocket URL as query parameter
       const wsUrl = `${wsBaseUrl}/shell?token=${encodeURIComponent(token)}`;
+      console.log('[Shell] Creating WebSocket with URL:', wsUrl);
       
       ws.current = new WebSocket(wsUrl);
+      console.log('[Shell] WebSocket created, state:', ws.current.readyState);
 
       ws.current.onopen = () => {
+        console.log('[Shell] WebSocket opened successfully');
         setIsConnected(true);
         setIsConnecting(false);
         
@@ -484,6 +518,12 @@ function Shell({ selectedProject, selectedSession, isActive }) {
       };
 
       ws.current.onclose = (event) => {
+        console.log('[Shell] WebSocket closed', {
+          code: event.code,
+          reason: event.reason,
+          wasClean: event.wasClean
+        });
+        
         setIsConnected(false);
         setIsConnecting(false);
         
@@ -497,10 +537,13 @@ function Shell({ selectedProject, selectedSession, isActive }) {
       };
 
       ws.current.onerror = (error) => {
+        console.error('[Shell] WebSocket error:', error);
+        console.error('[Shell] WebSocket readyState:', ws.current?.readyState);
         setIsConnected(false);
         setIsConnecting(false);
       };
     } catch (error) {
+      console.error('[Shell] connectWebSocket error:', error);
       setIsConnected(false);
       setIsConnecting(false);
     }

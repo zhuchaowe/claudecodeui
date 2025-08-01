@@ -147,23 +147,40 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ 
   server,
   verifyClient: (info) => {
-    console.log('WebSocket connection attempt to:', info.req.url);
+    console.log('🔌 WebSocket connection attempt:', {
+      url: info.req.url,
+      headers: Object.keys(info.req.headers),
+      origin: info.origin
+    });
     
     // Extract token from query parameters or headers
     const url = new URL(info.req.url, 'http://localhost');
     const token = url.searchParams.get('token') || 
                   info.req.headers.authorization?.split(' ')[1];
     
+    console.log('🔑 Token extraction:', {
+      hasToken: !!token,
+      tokenLength: token?.length,
+      source: url.searchParams.get('token') ? 'query' : 'header'
+    });
+    
     // Verify token
     const user = authenticateWebSocket(token);
     if (!user) {
-      console.log('❌ WebSocket authentication failed');
+      console.log('❌ WebSocket authentication failed:', {
+        tokenProvided: !!token,
+        tokenLength: token?.length
+      });
       return false;
     }
     
     // Store user info in the request for later use
     info.req.user = user;
-    console.log('✅ WebSocket authenticated for user:', user.username);
+    console.log('✅ WebSocket authenticated:', {
+      username: user.username,
+      userId: user.id,
+      path: info.req.url
+    });
     return true;
   }
 });
@@ -334,6 +351,7 @@ app.post('/api/projects/create-git', authenticateToken, async (req, res) => {
     }
     
     // Create projects directory structure
+    // Use the actual projects directory for cloning, not session storage
     const projectsBaseDir = process.env.PROJECTS_DIR || '/home/claude/projects';
     const userProjectsDir = path.join(projectsBaseDir, req.user.username);
     const targetDir = path.join(userProjectsDir, folderName.trim());
@@ -366,11 +384,24 @@ app.post('/api/projects/create-git', authenticateToken, async (req, res) => {
       // For cloned projects, we don't need to call addProjectManually
       // The project will be automatically discovered when the user refreshes the project list
       // Just create the project ownership
-      await projectDb.createProjectOwnership(folderName, req.user.username);
+      // Encode the target directory path to create session folder name
+      const encodedProjectName = targetDir.replace(/\//g, '-');
+      await projectDb.createProjectOwnership(encodedProjectName, req.user.username);
+      
+      // Create session directory for the project
+      const sessionStorageDir = path.join(process.env.HOME, '.claude/projects');
+      const projectSessionDir = path.join(sessionStorageDir, encodedProjectName);
+      
+      try {
+        await fsPromises.mkdir(projectSessionDir, { recursive: true });
+        console.log(`Created session directory: ${projectSessionDir}`);
+      } catch (err) {
+        console.error('Error creating session directory:', err);
+      }
       
       // Return project info directly
       const project = {
-        name: folderName,
+        name: encodedProjectName,
         path: targetDir,
         fullPath: targetDir,
         displayName: folderName,
@@ -568,15 +599,31 @@ app.get('/api/projects/:projectName/files', authenticateToken, async (req, res) 
 // WebSocket connection handler that routes based on URL path
 wss.on('connection', (ws, request) => {
   const url = request.url;
-  console.log('🔗 Client connected to:', url);
+  console.log('🔗 WebSocket connection established:', {
+    url: url,
+    userAgent: request.headers['user-agent'],
+    origin: request.headers.origin,
+    hasUser: !!request.user
+  });
   
   // Get user info from request (set by verifyClient)
   const user = request.user;
+  if (!user) {
+    console.error('❌ No user info on WebSocket connection!');
+    ws.close();
+    return;
+  }
+  
   ws.user = user; // Store user info on the WebSocket object
   
   // Parse URL to get pathname without query parameters
   const urlObj = new URL(url, 'http://localhost');
   const pathname = urlObj.pathname;
+  
+  console.log('🚦 Routing WebSocket to handler:', {
+    pathname,
+    username: user.username
+  });
   
   if (pathname === '/shell') {
     handleShellConnection(ws);
@@ -658,13 +705,20 @@ function handleChatConnection(ws) {
 
 // Handle shell WebSocket connections
 function handleShellConnection(ws) {
-  console.log('🐚 Shell client connected');
+  console.log('🐚 Shell client connected:', {
+    username: ws.user?.username,
+    readyState: ws.readyState
+  });
   let shellProcess = null;
   
   ws.on('message', async (message) => {
     try {
       const data = JSON.parse(message);
-      console.log('📨 Shell message received:', data.type);
+      console.log('📨 Shell message received:', {
+        type: data.type,
+        username: ws.user?.username,
+        dataKeys: Object.keys(data)
+      });
       
       if (data.type === 'init') {
         // Initialize shell with project path and session info
@@ -672,8 +726,14 @@ function handleShellConnection(ws) {
         const sessionId = data.sessionId;
         const hasSession = data.hasSession;
         
-        console.log('🚀 Starting shell in:', projectPath);
-        console.log('📋 Session info:', hasSession ? `Resume session ${sessionId}` : 'New session');
+        console.log('🚀 Starting shell:', {
+          projectPath,
+          sessionId,
+          hasSession,
+          cols: data.cols,
+          rows: data.rows,
+          username: ws.user?.username
+        });
         
         // First send a welcome message
         const welcomeMsg = hasSession ? 
@@ -703,6 +763,9 @@ function handleShellConnection(ws) {
           // First check if claude command exists
           const checkCommand = 'which claude || echo "CLAUDE_NOT_FOUND"';
           
+          console.log('🔍 Checking for Claude CLI...');
+          console.log('🖥️  Spawning PTY with command:', `bash -l -c "${checkCommand} && ${shellCommand}"`);
+          
           // Start shell using PTY for proper terminal emulation
           // Use bash -l (login shell) to ensure .bashrc/.bash_profile are loaded
           shellProcess = pty.spawn('bash', ['-l', '-c', `${checkCommand} && ${shellCommand}`], {
@@ -720,7 +783,12 @@ function handleShellConnection(ws) {
             }
           });
           
-          console.log('🟢 Shell process started with PTY, PID:', shellProcess.pid);
+          console.log('🟢 Shell process started:', {
+            pid: shellProcess.pid,
+            cols: data.cols || 80,
+            rows: data.rows || 24,
+            command: shellCommand
+          });
           
           // Track if we've seen the claude command check
           let claudeCheckDone = false;
@@ -802,7 +870,11 @@ function handleShellConnection(ws) {
           });
           
         } catch (spawnError) {
-          console.error('❌ Error spawning process:', spawnError);
+          console.error('❌ Error spawning process:', {
+            error: spawnError.message,
+            stack: spawnError.stack,
+            username: ws.user?.username
+          });
           ws.send(JSON.stringify({
             type: 'output',
             data: `\r\n\x1b[31mError: ${spawnError.message}\x1b[0m\r\n`
@@ -839,7 +911,10 @@ function handleShellConnection(ws) {
   });
   
   ws.on('close', () => {
-    console.log('🔌 Shell client disconnected');
+    console.log('🔌 Shell client disconnected:', {
+      username: ws.user?.username,
+      hadProcess: !!shellProcess
+    });
     if (shellProcess && shellProcess.kill) {
       console.log('🔴 Killing shell process:', shellProcess.pid);
       shellProcess.kill();
@@ -847,7 +922,11 @@ function handleShellConnection(ws) {
   });
   
   ws.on('error', (error) => {
-    console.error('❌ Shell WebSocket error:', error);
+    console.error('❌ Shell WebSocket error:', {
+      error: error.message,
+      username: ws.user?.username,
+      code: error.code
+    });
   });
 }
 // Audio transcription endpoint

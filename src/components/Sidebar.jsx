@@ -331,7 +331,7 @@ function Sidebar({
     const isShared = project.isShared;
     const confirmMessage = isShared 
       ? 'Are you sure you want to remove your access to this shared project? You can re-add it later if needed.'
-      : 'Are you sure you want to delete this empty project? This action cannot be undone.';
+      : 'Are you sure you want to delete this project? This will permanently delete the project directory and ALL sessions. This action cannot be undone.';
     
     if (!confirm(confirmMessage)) {
       return;
@@ -1160,7 +1160,7 @@ function Sidebar({
                                       : "text-gray-600 dark:text-gray-400"
                                   )} />
                                 </button>
-                                {(getAllSessions(project).length === 0 || project.isShared) && (
+                                {(!project.isShared || project.isShared) && (
                                   <button
                                     className="w-8 h-8 rounded-lg bg-red-500/10 dark:bg-red-900/30 flex items-center justify-center active:scale-90 border border-red-200 dark:border-red-800"
                                     onClick={(e) => {
@@ -1168,7 +1168,7 @@ function Sidebar({
                                       deleteProject(project);
                                     }}
                                     onTouchEnd={handleTouchClick(() => deleteProject(project))}
-                                    title={project.isShared ? "Remove access to shared project" : "Delete empty project"}
+                                    title={project.isShared ? "Remove access to shared project" : "Delete project"}
                                   >
                                     <Trash2 className="w-4 h-4 text-red-600 dark:text-red-400" />
                                   </button>
@@ -1326,14 +1326,14 @@ function Sidebar({
                             >
                               <Edit3 className="w-3 h-3" />
                             </div>
-                            {(getAllSessions(project).length === 0 || project.isShared) && (
+                            {(!project.isShared || project.isShared) && (
                               <div
                                 className="w-6 h-6 opacity-0 group-hover:opacity-100 transition-all duration-200 hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center justify-center rounded cursor-pointer touch:opacity-100"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   deleteProject(project);
                                 }}
-                                title={project.isShared ? "Remove access to shared project" : "Delete empty project (Delete)"}
+                                title={project.isShared ? "Remove access to shared project" : "Delete project (Delete)"}
                               >
                                 <Trash2 className="w-3 h-3 text-red-600 dark:text-red-400" />
                               </div>
