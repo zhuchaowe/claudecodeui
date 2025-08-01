@@ -807,26 +807,41 @@ router.post('/push', async (req, res) => {
             tempRemoteName = `temp_push_${Date.now()}`;
             
             console.log('Setting temporary remote with credentials...');
+            console.log('Credential URL format:', credentialUrl.replace(finalCredentials.token, 'TOKEN_HIDDEN'));
+            
             // Add temporary remote
-            await execAsync(`git remote add ${tempRemoteName} "${credentialUrl}"`, { cwd: projectPath });
+            const addRemoteCmd = `git remote add ${tempRemoteName} "${credentialUrl}"`;
+            console.log('Add remote command:', addRemoteCmd.replace(finalCredentials.token, 'TOKEN_HIDDEN'));
+            await execAsync(addRemoteCmd, { cwd: projectPath });
+            
+            // Verify remote was added
+            const { stdout: remoteList } = await execAsync('git remote -v', { cwd: projectPath });
+            console.log('Current remotes after adding:', remoteList);
             
             // Use the temporary remote for push
             pushCommand = `git push ${tempRemoteName} ${remoteBranch}`;
           }
         }
         
-        const { stdout } = await execAsync(pushCommand, { 
+        console.log('Executing push command:', pushCommand);
+        const { stdout, stderr } = await execAsync(pushCommand, { 
           cwd: projectPath,
           env,
           timeout: 30000 // 30 second timeout
         });
+        
+        console.log('Push stdout:', stdout);
+        console.log('Push stderr:', stderr);
+        
+        // Add a small delay before cleanup to ensure git completes
+        await new Promise(resolve => setTimeout(resolve, 1000));
         
         cleanup(); // Clean up credential files immediately on success
         await cleanupTempRemote(); // Clean up temporary remote
         
         res.json({ 
           success: true, 
-          output: stdout || 'Push completed successfully', 
+          output: stdout || stderr || 'Push completed successfully', 
           remoteName,
           remoteBranch
         });
