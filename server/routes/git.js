@@ -4,6 +4,12 @@ import { promisify } from 'util';
 import path from 'path';
 import { promises as fs } from 'fs';
 import { extractProjectDirectory } from '../projects.js';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
+
+// Get __dirname equivalent in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 const router = express.Router();
 const execAsync = promisify(exec);
@@ -617,7 +623,7 @@ router.post('/pull', async (req, res) => {
 
 // Push commits to remote repository
 router.post('/push', async (req, res) => {
-  const { project } = req.body;
+  const { project, credentials } = req.body;
   
   if (!project) {
     return res.status(400).json({ error: 'Project name is required' });
@@ -643,16 +649,111 @@ router.post('/push', async (req, res) => {
       console.log('No upstream configured, using origin/branch as fallback');
     }
 
-    const { stdout } = await execAsync(`git push ${remoteName} ${remoteBranch}`, { cwd: projectPath });
+    // Get remote URL to determine if we need credentials
+    let remoteUrl = '';
+    try {
+      const { stdout: urlOutput } = await execAsync(`git remote get-url ${remoteName}`, { cwd: projectPath });
+      remoteUrl = urlOutput.trim();
+    } catch (error) {
+      console.error('Failed to get remote URL:', error);
+    }
+
+    // Prepare environment for git command with credentials if provided
+    let env = { ...process.env };
     
-    res.json({ 
-      success: true, 
-      output: stdout || 'Push completed successfully', 
-      remoteName,
-      remoteBranch
-    });
+    if (credentials && (credentials.username || credentials.token)) {
+      // Create a unique session ID for this push operation
+      const sessionId = `push_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+      const credentialCacheDir = path.join(__dirname, '../.git-credentials-cache');
+      const credentialFile = path.join(credentialCacheDir, `${sessionId}.json`);
+      
+      // Ensure cache directory exists
+      await fs.mkdir(credentialCacheDir, { recursive: true, mode: 0o700 });
+      
+      // Write credentials to temporary file
+      const credentialData = {
+        username: credentials.username || '',
+        password: credentials.token || credentials.password || '',
+        token: credentials.token || '',
+        timestamp: Date.now()
+      };
+      
+      await fs.writeFile(credentialFile, JSON.stringify(credentialData), { mode: 0o600 });
+      
+      // Set environment variables for git askpass
+      env.GIT_ASKPASS = path.join(__dirname, '../git-askpass-helper.cjs');
+      env.GIT_CREDENTIAL_SESSION_ID = sessionId;
+      
+      // Clean up function
+      const cleanup = async () => {
+        try {
+          await fs.unlink(credentialFile);
+          
+          // Also clean up old credential files (older than 1 hour)
+          const files = await fs.readdir(credentialCacheDir);
+          const now = Date.now();
+          for (const file of files) {
+            if (file.endsWith('.json')) {
+              const filePath = path.join(credentialCacheDir, file);
+              try {
+                const stats = await fs.stat(filePath);
+                if (now - stats.mtimeMs > 3600000) { // 1 hour
+                  await fs.unlink(filePath);
+                }
+              } catch (error) {
+                // Ignore errors for individual file cleanup
+              }
+            }
+          }
+        } catch (error) {
+          // Ignore cleanup errors
+        }
+      };
+      
+      // Set a timeout to clean up after 5 seconds
+      setTimeout(cleanup, 5000);
+      
+      try {
+        const { stdout } = await execAsync(`git push ${remoteName} ${remoteBranch}`, { 
+          cwd: projectPath,
+          env,
+          timeout: 30000 // 30 second timeout
+        });
+        
+        cleanup(); // Clean up immediately on success
+        
+        res.json({ 
+          success: true, 
+          output: stdout || 'Push completed successfully', 
+          remoteName,
+          remoteBranch
+        });
+      } catch (pushError) {
+        cleanup(); // Clean up on error
+        throw pushError;
+      }
+    } else {
+      // No credentials provided, try push without authentication
+      // Set GIT_TERMINAL_PROMPT=0 to prevent git from asking for credentials
+      const { stdout } = await execAsync(`git push ${remoteName} ${remoteBranch}`, { 
+        cwd: projectPath,
+        timeout: 30000, // 30 second timeout
+        env: {
+          ...process.env,
+          GIT_TERMINAL_PROMPT: '0' // Disable terminal prompts
+        }
+      });
+      
+      res.json({ 
+        success: true, 
+        output: stdout || 'Push completed successfully', 
+        remoteName,
+        remoteBranch
+      });
+    }
   } catch (error) {
-    console.error('Git push error:', error);
+    console.error('Git push error:', error.message);
+    console.error('Full error:', error);
     
     // Enhanced error handling for common push scenarios
     let errorMessage = 'Push failed';
@@ -670,9 +771,44 @@ router.post('/push', async (req, res) => {
     } else if (error.message.includes('fatal: \'origin\' does not appear to be a git repository')) {
       errorMessage = 'Remote not configured';
       details = 'No remote repository configured. Add a remote with: git remote add origin <url>';
-    } else if (error.message.includes('Permission denied')) {
-      errorMessage = 'Authentication failed';
-      details = 'Permission denied. Check your credentials or SSH keys.';
+    } else if (error.message.includes('Permission denied') || 
+               error.message.includes('Authentication failed') ||
+               error.message.includes('could not read Username') ||
+               error.message.includes('could not read Password') ||
+               error.message.includes('terminal prompts disabled') ||
+               error.message.includes('fatal: Authentication failed') ||
+               error.message.includes('remote: Invalid username or password') ||
+               error.message.includes('fatal: unable to access')) {
+      errorMessage = 'Authentication required';
+      details = 'Authentication is required to push to this repository.';
+      
+      // Try to determine the remote type from the URL
+      let remoteType = 'generic';
+      try {
+        const { stdout: urlOutput } = await execAsync(`git remote get-url ${remoteName || 'origin'}`, { cwd: projectPath });
+        const remoteUrl = urlOutput.trim();
+        
+        if (remoteUrl.includes('github.com')) {
+          remoteType = 'github';
+          details = 'GitHub requires a Personal Access Token for authentication. Username should be your GitHub username, and password should be your Personal Access Token.';
+        } else if (remoteUrl.includes('gitlab.com')) {
+          remoteType = 'gitlab';
+          details = 'GitLab requires a Personal Access Token or password for authentication.';
+        } else if (remoteUrl.includes('bitbucket.org')) {
+          remoteType = 'bitbucket';
+          details = 'Bitbucket requires an App Password for authentication.';
+        }
+      } catch (urlError) {
+        // Ignore URL detection errors
+      }
+      
+      res.status(401).json({ 
+        error: errorMessage, 
+        details: details,
+        requiresAuth: true,
+        remoteType: remoteType
+      });
+      return;
     } else if (error.message.includes('no upstream branch')) {
       errorMessage = 'No upstream branch';
       details = 'No upstream branch configured. Use: git push --set-upstream origin <branch>';

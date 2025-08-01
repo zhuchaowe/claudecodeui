@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { GitBranch, GitCommit, Plus, Minus, RefreshCw, Check, X, ChevronDown, ChevronRight, Info, History, FileText, Mic, MicOff, Sparkles, Download, RotateCcw, Trash2, AlertTriangle, Upload } from 'lucide-react';
 import { MicButton } from './MicButton.jsx';
 import { authenticatedFetch } from '../utils/api';
+import GitCredentialModal from './GitCredentialModal.jsx';
 
 function GitPanel({ selectedProject, isMobile }) {
   const [gitStatus, setGitStatus] = useState(null);
@@ -31,6 +32,10 @@ function GitPanel({ selectedProject, isMobile }) {
   const [isPublishing, setIsPublishing] = useState(false);
   const [isCommitAreaCollapsed, setIsCommitAreaCollapsed] = useState(isMobile); // Collapsed by default on mobile
   const [confirmAction, setConfirmAction] = useState(null); // { type: 'discard|commit|pull|push', file?: string, message?: string }
+  const [showCredentialModal, setShowCredentialModal] = useState(false);
+  const [credentialError, setCredentialError] = useState('');
+  const [remoteType, setRemoteType] = useState('generic');
+  const [pendingPushCredentials, setPendingPushCredentials] = useState(null);
   const textareaRef = useRef(null);
   const dropdownRef = useRef(null);
 
@@ -119,6 +124,8 @@ function GitPanel({ selectedProject, isMobile }) {
     try {
       const response = await authenticatedFetch(`/api/git/remote-status?project=${encodeURIComponent(selectedProject.name)}`);
       const data = await response.json();
+      
+      console.log('Remote status response:', data); // Debug log
       
       if (!data.error) {
         setRemoteStatus(data);
@@ -240,31 +247,89 @@ function GitPanel({ selectedProject, isMobile }) {
     }
   };
 
-  const handlePush = async () => {
+  const handlePush = async (credentials = null) => {
+    console.log('handlePush called with credentials:', credentials ? 'provided' : 'null');
     setIsPushing(true);
     try {
       const response = await authenticatedFetch('/api/git/push', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          project: selectedProject.name
+          project: selectedProject.name,
+          credentials: credentials
         })
       });
       
+      console.log('Push response status:', response.status);
       const data = await response.json();
-      if (data.success) {
+      console.log('Push response data:', data);
+      
+      if (response.status === 401 && data.requiresAuth) {
+        // Authentication required
+        console.log('Authentication required, showing credential modal');
+        setRemoteType(data.remoteType || 'generic');
+        setCredentialError(data.details || 'Authentication required');
+        setShowCredentialModal(true);
+      } else if (data.success) {
         // Refresh status after successful push
+        console.log('Push successful');
         fetchGitStatus();
         fetchRemoteStatus();
+        // Close credential modal if it was open
+        setShowCredentialModal(false);
+        setCredentialError('');
       } else {
-        console.error('Push failed:', data.error);
-        // TODO: Show user-friendly error message
+        console.error('Push failed:', data.error, data.details);
+        if (showCredentialModal) {
+          setCredentialError(data.details || data.error || 'Push failed');
+        } else if (data.requiresAuth) {
+          // Handle case where backend didn't return 401 but still requires auth
+          console.log('Push failed with auth requirement, showing modal');
+          setRemoteType(data.remoteType || 'generic');
+          setCredentialError(data.details || data.error || 'Authentication required');
+          setShowCredentialModal(true);
+        } else if (data.error === 'Push rejected' || data.details?.includes('newer commits')) {
+          // Handle push rejected due to remote changes
+          console.log('Push rejected due to remote changes');
+          // Force refresh remote status to show pull button
+          await fetchRemoteStatus();
+          // Show user-friendly error message
+          setConfirmAction({
+            type: 'info',
+            title: 'Push Rejected - Pull Required',
+            message: data.details || 'The remote has newer commits. You need to pull and merge changes before pushing.',
+            actions: [
+              {
+                label: 'Refresh Status',
+                action: async () => {
+                  await fetchGitStatus();
+                  await fetchRemoteStatus();
+                  setConfirmAction(null);
+                }
+              }
+            ]
+          });
+        } else {
+          // Other errors
+          setConfirmAction({
+            type: 'error',
+            title: 'Push Failed',
+            message: data.details || data.error || 'An error occurred while pushing to the remote repository.'
+          });
+        }
       }
     } catch (error) {
       console.error('Error pushing to remote:', error);
+      if (showCredentialModal) {
+        setCredentialError('Network error. Please check your connection.');
+      }
     } finally {
       setIsPushing(false);
     }
+  };
+
+  const handleCredentialSubmit = async (credentials) => {
+    await handlePush(credentials);
   };
 
   const handlePublish = async () => {
@@ -372,7 +437,7 @@ function GitPanel({ selectedProject, isMobile }) {
           await handlePull();
           break;
         case 'push':
-          await handlePush();
+          await handlePush(null);
           break;
         case 'publish':
           await handlePublish();
@@ -815,21 +880,25 @@ function GitPanel({ selectedProject, isMobile }) {
               )}
               
               {/* Show normal push/pull buttons only if branch has upstream */}
-              {remoteStatus?.hasUpstream && !remoteStatus?.isUpToDate && (
+              {remoteStatus?.hasUpstream && (
                 <>
-                  {/* Pull button - show when behind (primary action) */}
-                  {remoteStatus.behind > 0 && (
+                  {/* Pull button - show when behind or when we don't know the exact count */}
+                  {(remoteStatus.behind > 0 || (!remoteStatus.isUpToDate && remoteStatus.behind === undefined)) && (
                     <button
                       onClick={() => setConfirmAction({ 
                         type: 'pull', 
-                        message: `Pull ${remoteStatus.behind} commit${remoteStatus.behind !== 1 ? 's' : ''} from ${remoteStatus.remoteName}?` 
+                        message: remoteStatus.behind > 0 
+                          ? `Pull ${remoteStatus.behind} commit${remoteStatus.behind !== 1 ? 's' : ''} from ${remoteStatus.remoteName}?` 
+                          : `Pull latest changes from ${remoteStatus.remoteName}?`
                       })}
                       disabled={isPulling}
                       className="px-2 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 flex items-center gap-1"
-                      title={`Pull ${remoteStatus.behind} commit${remoteStatus.behind !== 1 ? 's' : ''} from ${remoteStatus.remoteName}`}
+                      title={remoteStatus.behind > 0 
+                        ? `Pull ${remoteStatus.behind} commit${remoteStatus.behind !== 1 ? 's' : ''} from ${remoteStatus.remoteName}`
+                        : `Pull latest changes from ${remoteStatus.remoteName}`}
                     >
                       <Download className={`w-3 h-3 ${isPulling ? 'animate-pulse' : ''}`} />
-                      <span>{isPulling ? 'Pulling...' : `Pull ${remoteStatus.behind}`}</span>
+                      <span>{isPulling ? 'Pulling...' : remoteStatus.behind > 0 ? `Pull ${remoteStatus.behind}` : 'Pull'}</span>
                     </button>
                   )}
                   
@@ -849,18 +918,48 @@ function GitPanel({ selectedProject, isMobile }) {
                     </button>
                   )}
                   
-                  {/* Fetch button - show when ahead only or when diverged (secondary action) */}
-                  {(remoteStatus.ahead > 0 || (remoteStatus.behind > 0 && remoteStatus.ahead > 0)) && (
+                  {/* Always show Push button if we have upstream but no specific ahead count */}
+                  {remoteStatus.ahead === 0 && remoteStatus.behind === 0 && (
                     <button
-                      onClick={handleFetch}
-                      disabled={isFetching}
-                      className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"
-                      title={`Fetch from ${remoteStatus.remoteName}`}
+                      onClick={() => setConfirmAction({ 
+                        type: 'push', 
+                        message: `Push to ${remoteStatus.remoteName}?` 
+                      })}
+                      disabled={isPushing}
+                      className="px-2 py-1 text-xs bg-orange-600 text-white rounded hover:bg-orange-700 disabled:opacity-50 flex items-center gap-1"
+                      title={`Push to ${remoteStatus.remoteName}`}
                     >
-                      <RefreshCw className={`w-3 h-3 ${isFetching ? 'animate-spin' : ''}`} />
-                      <span>{isFetching ? 'Fetching...' : 'Fetch'}</span>
+                      <Upload className={`w-3 h-3 ${isPushing ? 'animate-pulse' : ''}`} />
+                      <span>{isPushing ? 'Pushing...' : 'Push'}</span>
                     </button>
                   )}
+                  
+                  {/* Always show Pull button when we have upstream (for conflict resolution) */}
+                  {remoteStatus.behind === 0 && (
+                    <button
+                      onClick={() => setConfirmAction({ 
+                        type: 'pull', 
+                        message: `Pull latest changes from ${remoteStatus.remoteName}?` 
+                      })}
+                      disabled={isPulling}
+                      className="px-2 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 flex items-center gap-1"
+                      title={`Pull from ${remoteStatus.remoteName}`}
+                    >
+                      <Download className={`w-3 h-3 ${isPulling ? 'animate-pulse' : ''}`} />
+                      <span>{isPulling ? 'Pulling...' : 'Pull'}</span>
+                    </button>
+                  )}
+                  
+                  {/* Fetch button - always show when we have upstream */}
+                  <button
+                    onClick={handleFetch}
+                    disabled={isFetching}
+                    className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 flex items-center gap-1"
+                    title={`Fetch from ${remoteStatus.remoteName}`}
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isFetching ? 'animate-spin' : ''}`} />
+                    <span>{isFetching ? 'Fetching...' : 'Fetch'}</span>
+                  </button>
                 </>
               )}
             </>
@@ -1221,18 +1320,27 @@ function GitPanel({ selectedProject, isMobile }) {
             <div className="p-6">
               <div className="flex items-center mb-4">
                 <div className={`p-2 rounded-full mr-3 ${
-                  (confirmAction.type === 'discard' || confirmAction.type === 'delete') ? 'bg-red-100 dark:bg-red-900' : 'bg-yellow-100 dark:bg-yellow-900'
+                  (confirmAction.type === 'discard' || confirmAction.type === 'delete') ? 'bg-red-100 dark:bg-red-900' : 
+                  confirmAction.type === 'info' ? 'bg-blue-100 dark:bg-blue-900' :
+                  confirmAction.type === 'error' ? 'bg-red-100 dark:bg-red-900' :
+                  'bg-yellow-100 dark:bg-yellow-900'
                 }`}>
                   <AlertTriangle className={`w-5 h-5 ${
-                    (confirmAction.type === 'discard' || confirmAction.type === 'delete') ? 'text-red-600 dark:text-red-400' : 'text-yellow-600 dark:text-yellow-400'
+                    (confirmAction.type === 'discard' || confirmAction.type === 'delete' || confirmAction.type === 'error') ? 'text-red-600 dark:text-red-400' : 
+                    confirmAction.type === 'info' ? 'text-blue-600 dark:text-blue-400' :
+                    'text-yellow-600 dark:text-yellow-400'
                   }`} />
                 </div>
                 <h3 className="text-lg font-semibold">
-                  {confirmAction.type === 'discard' ? 'Discard Changes' : 
-                   confirmAction.type === 'delete' ? 'Delete File' :
-                   confirmAction.type === 'commit' ? 'Confirm Commit' : 
-                   confirmAction.type === 'pull' ? 'Confirm Pull' : 
-                   confirmAction.type === 'publish' ? 'Publish Branch' : 'Confirm Push'}
+                  {confirmAction.title || 
+                   (confirmAction.type === 'discard' ? 'Discard Changes' : 
+                    confirmAction.type === 'delete' ? 'Delete File' :
+                    confirmAction.type === 'commit' ? 'Confirm Commit' : 
+                    confirmAction.type === 'pull' ? 'Confirm Pull' : 
+                    confirmAction.type === 'publish' ? 'Publish Branch' : 
+                    confirmAction.type === 'info' ? 'Information' :
+                    confirmAction.type === 'error' ? 'Error' :
+                    'Confirm Push')}
                 </h3>
               </div>
               
@@ -1241,26 +1349,49 @@ function GitPanel({ selectedProject, isMobile }) {
               </p>
               
               <div className="flex justify-end space-x-3">
-                <button
-                  onClick={() => setConfirmAction(null)}
-                  className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={confirmAndExecute}
-                  className={`px-4 py-2 text-sm text-white rounded-md ${
-                    (confirmAction.type === 'discard' || confirmAction.type === 'delete')
-                      ? 'bg-red-600 hover:bg-red-700' 
-                      : confirmAction.type === 'commit'
-                      ? 'bg-blue-600 hover:bg-blue-700'
-                      : confirmAction.type === 'pull'
-                      ? 'bg-green-600 hover:bg-green-700'
-                      : confirmAction.type === 'publish'
-                      ? 'bg-purple-600 hover:bg-purple-700'
-                      : 'bg-orange-600 hover:bg-orange-700'
-                  } flex items-center space-x-2`}
-                >
+                {confirmAction.actions ? (
+                  // Custom actions
+                  <>
+                    <button
+                      onClick={() => setConfirmAction(null)}
+                      className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
+                    >
+                      Close
+                    </button>
+                    {confirmAction.actions.map((action, index) => (
+                      <button
+                        key={index}
+                        onClick={action.action}
+                        className="px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700"
+                      >
+                        {action.label}
+                      </button>
+                    ))}
+                  </>
+                ) : (
+                  // Default confirm/cancel actions
+                  <>
+                    <button
+                      onClick={() => setConfirmAction(null)}
+                      className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
+                    >
+                      Cancel
+                    </button>
+                    {confirmAction.type !== 'info' && confirmAction.type !== 'error' && (
+                      <button
+                        onClick={confirmAndExecute}
+                        className={`px-4 py-2 text-sm text-white rounded-md ${
+                          (confirmAction.type === 'discard' || confirmAction.type === 'delete')
+                            ? 'bg-red-600 hover:bg-red-700' 
+                            : confirmAction.type === 'commit'
+                            ? 'bg-blue-600 hover:bg-blue-700'
+                            : confirmAction.type === 'pull'
+                            ? 'bg-green-600 hover:bg-green-700'
+                            : confirmAction.type === 'publish'
+                            ? 'bg-purple-600 hover:bg-purple-700'
+                            : 'bg-orange-600 hover:bg-orange-700'
+                        } flex items-center space-x-2`}
+                      >
                   {confirmAction.type === 'discard' ? (
                     <>
                       <Trash2 className="w-4 h-4" />
@@ -1292,12 +1423,27 @@ function GitPanel({ selectedProject, isMobile }) {
                       <span>Push</span>
                     </>
                   )}
-                </button>
+                      </button>
+                    )}
+                  </>
+                )}
               </div>
             </div>
           </div>
         </div>
       )}
+
+      {/* Git Credential Modal */}
+      <GitCredentialModal
+        isOpen={showCredentialModal}
+        onClose={() => {
+          setShowCredentialModal(false);
+          setCredentialError('');
+        }}
+        onSubmit={handleCredentialSubmit}
+        remoteType={remoteType}
+        errorMessage={credentialError}
+      />
     </div>
   );
 }
