@@ -888,6 +888,20 @@ router.post('/push', async (req, res) => {
         console.log('Push stdout:', stdout);
         console.log('Push stderr:', stderr);
         
+        // Check if push was successful
+        const pushSucceeded = stderr && stderr.includes('->');
+        
+        if (pushSucceeded) {
+          console.log('Push succeeded, updating remote tracking branch...');
+          // Update the remote tracking branch to match what we just pushed
+          try {
+            await execAsync(`git update-ref refs/remotes/${remoteName}/${remoteBranch} HEAD`, { cwd: projectPath });
+            console.log('Updated remote tracking branch');
+          } catch (e) {
+            console.log('Failed to update remote tracking branch:', e.message);
+          }
+        }
+        
         // Add a small delay before cleanup to ensure git completes
         await new Promise(resolve => setTimeout(resolve, 1000));
         
