@@ -5,6 +5,7 @@ import { MessageSquare, Github } from 'lucide-react';
 const LoginForm = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [allowedOrgs, setAllowedOrgs] = useState(null);
   
   const { login } = useAuth();
 
@@ -23,9 +24,30 @@ const LoginForm = () => {
     }
     
     if (errorParam) {
-      setError('GitHub login failed. Please try again.');
+      let errorMessage = 'GitHub login failed. Please try again.';
+      if (errorParam === 'org_access_denied') {
+        errorMessage = 'Access denied. You must be a member of an allowed organization to login.';
+      }
+      setError(errorMessage);
       window.history.replaceState({}, document.title, window.location.pathname);
     }
+  }, []);
+
+  // Fetch allowed organizations on component mount
+  useEffect(() => {
+    const fetchAllowedOrgs = async () => {
+      try {
+        const response = await fetch('/api/github/allowed-orgs');
+        if (response.ok) {
+          const data = await response.json();
+          setAllowedOrgs(data);
+        }
+      } catch (error) {
+        console.error('Failed to fetch allowed organizations:', error);
+      }
+    };
+    
+    fetchAllowedOrgs();
   }, []);
 
   const handleGithubLogin = async () => {
@@ -71,6 +93,17 @@ const LoginForm = () => {
           {error && (
             <div className="p-3 bg-red-100 dark:bg-red-900/20 border border-red-300 dark:border-red-800 rounded-md">
               <p className="text-sm text-red-700 dark:text-red-400">{error}</p>
+            </div>
+          )}
+
+          {allowedOrgs?.hasRestrictions && (
+            <div className="p-3 bg-blue-100 dark:bg-blue-900/20 border border-blue-300 dark:border-blue-800 rounded-md">
+              <p className="text-sm text-blue-700 dark:text-blue-400">
+                <strong>Note:</strong> Access is restricted to members of the following GitHub organization{allowedOrgs.organizations.length > 1 ? 's' : ''}: <strong>{allowedOrgs.organizations.join(', ')}</strong>
+              </p>
+              <p className="text-xs text-blue-600 dark:text-blue-500 mt-1">
+                You must be a member of {allowedOrgs.organizations.length > 1 ? 'one of these organizations' : 'this organization'} to login.
+              </p>
             </div>
           )}
 

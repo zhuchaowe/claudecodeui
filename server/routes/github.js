@@ -10,11 +10,53 @@ const router = express.Router();
 const getGithubConfig = () => ({
   GITHUB_CLIENT_ID: process.env.GITHUB_CLIENT_ID,
   GITHUB_CLIENT_SECRET: process.env.GITHUB_CLIENT_SECRET,
-  GITHUB_REDIRECT_URI: process.env.GITHUB_REDIRECT_URI || 'http://localhost:3008/api/github/callback'
+  GITHUB_REDIRECT_URI: process.env.GITHUB_REDIRECT_URI || 'http://localhost:3008/api/github/callback',
+  GITHUB_ALLOWED_ORGS: process.env.GITHUB_ALLOWED_ORGS?.split(',').map(org => org.trim()) || []
 });
 
 // Store state temporarily (in production, use Redis or similar)
 const oauthStates = new Map();
+
+// Check if user belongs to allowed organizations
+const checkUserOrganization = async (accessToken, allowedOrgs) => {
+  if (!allowedOrgs || allowedOrgs.length === 0) {
+    return true; // No organization restrictions
+  }
+
+  try {
+    const response = await fetch('https://api.github.com/user/orgs', {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Accept': 'application/vnd.github.v3+json'
+      }
+    });
+
+    if (!response.ok) {
+      console.error('Failed to fetch user organizations');
+      return false;
+    }
+
+    const orgs = await response.json();
+    const userOrgs = orgs.map(org => org.login.toLowerCase());
+    
+    // Check if user belongs to any allowed organization
+    return allowedOrgs.some(allowedOrg => 
+      userOrgs.includes(allowedOrg.toLowerCase())
+    );
+  } catch (error) {
+    console.error('Error checking user organization:', error);
+    return false;
+  }
+};
+
+// Get allowed organizations configuration
+router.get('/allowed-orgs', (req, res) => {
+  const { GITHUB_ALLOWED_ORGS } = getGithubConfig();
+  res.json({ 
+    hasRestrictions: GITHUB_ALLOWED_ORGS.length > 0,
+    organizations: GITHUB_ALLOWED_ORGS 
+  });
+});
 
 // Generate OAuth URL for login (no auth required)
 router.get('/oauth/login-url', (req, res) => {
@@ -46,8 +88,9 @@ router.get('/oauth/login-url', (req, res) => {
   const authUrl = `https://github.com/login/oauth/authorize?` +
     `client_id=${GITHUB_CLIENT_ID}&` +
     `redirect_uri=${encodeURIComponent(GITHUB_REDIRECT_URI)}&` +
-    `scope=user:email%20repo&` +
-    `state=${state}`;
+    `scope=user:email%20repo%20read:org&` +
+    `state=${state}&` +
+    `prompt=consent`;
 
   res.json({ url: authUrl });
 });
@@ -85,7 +128,8 @@ router.get('/oauth/url', authenticateToken, (req, res) => {
     `client_id=${GITHUB_CLIENT_ID}&` +
     `redirect_uri=${encodeURIComponent(GITHUB_REDIRECT_URI)}&` +
     `scope=repo&` +
-    `state=${state}`;
+    `state=${state}&` +
+    `prompt=consent`;
 
   res.json({ url: authUrl });
 });
@@ -156,6 +200,16 @@ router.get('/callback', async (req, res) => {
 
     // Check if this is a login flow
     if (stateData.isLogin) {
+      const { GITHUB_ALLOWED_ORGS } = getGithubConfig();
+      
+      // Check organization membership if restrictions are configured
+      const hasOrgAccess = await checkUserOrganization(accessToken, GITHUB_ALLOWED_ORGS);
+      
+      if (!hasOrgAccess) {
+        console.log(`User ${githubUser.login} does not belong to allowed organizations:`, GITHUB_ALLOWED_ORGS);
+        return res.redirect(`${frontendUrl}/?error=org_access_denied`);
+      }
+      
       // Try to find existing user by GitHub username
       let user = userDb.getUserByGithubUsername(githubUser.login);
       
