@@ -6,6 +6,8 @@ import { promises as fs } from 'fs';
 import { extractProjectDirectory } from '../projects.js';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import { getUserById } from '../database/db.js';
+import fetch from 'node-fetch';
 
 // Get __dirname equivalent in ES modules
 const __filename = fileURLToPath(import.meta.url);
@@ -658,10 +660,78 @@ router.post('/push', async (req, res) => {
       console.error('Failed to get remote URL:', error);
     }
 
+    // Check if we should try to use GitHub OAuth token
+    let autoCredentials = null;
+    console.log('Checking for auto OAuth credentials...');
+    console.log('Has credentials:', !!credentials);
+    console.log('User ID:', req.user?.id);
+    console.log('Remote URL:', remoteUrl);
+    console.log('Is GitHub:', remoteUrl.includes('github.com'));
+    
+    if (!credentials && req.user?.id && remoteUrl.includes('github.com')) {
+      try {
+        // Get user's GitHub token from database
+        const user = await getUserById(req.user.id);
+        console.log('User found:', !!user);
+        console.log('Has GitHub token:', !!user?.github_token);
+        console.log('GitHub username:', user?.github_username);
+        
+        if (user.github_token && user.github_username) {
+          // Extract repository owner from remote URL
+          let repoOwner = null;
+          
+          // Handle both HTTPS and SSH URLs
+          if (remoteUrl.includes('github.com/')) {
+            // HTTPS: https://github.com/owner/repo.git
+            const match = remoteUrl.match(/github\.com\/([^\/]+)\//);
+            if (match) repoOwner = match[1];
+          } else if (remoteUrl.includes('git@github.com:')) {
+            // SSH: git@github.com:owner/repo.git
+            const match = remoteUrl.match(/git@github\.com:([^\/]+)\//);
+            if (match) repoOwner = match[1];
+          }
+          
+          console.log('Repository owner:', repoOwner, 'User GitHub username:', user.github_username);
+          
+          // Check if the repository belongs to the authenticated user
+          if (repoOwner && repoOwner.toLowerCase() === user.github_username.toLowerCase()) {
+            console.log('Repository belongs to authenticated user, using OAuth token');
+            autoCredentials = {
+              username: user.github_username,
+              token: user.github_token
+            };
+          } else {
+            console.log('Repository does not belong to user, skipping auto auth');
+          }
+        } else {
+          console.log('User does not have GitHub OAuth configured');
+        }
+      } catch (error) {
+        console.error('Error checking GitHub OAuth token:', error);
+        // Continue without auto credentials
+      }
+    } else {
+      console.log('Skipping auto OAuth check:', {
+        hasCredentials: !!credentials,
+        hasUser: !!req.user?.id,
+        isGitHub: remoteUrl.includes('github.com')
+      });
+    }
+
     // Prepare environment for git command with credentials if provided
     let env = { ...process.env };
     
-    if (credentials && (credentials.username || credentials.token)) {
+    // Use provided credentials or auto credentials
+    const finalCredentials = credentials || autoCredentials;
+    
+    console.log('Final credentials:', finalCredentials ? {
+      hasUsername: !!finalCredentials.username,
+      hasToken: !!finalCredentials.token,
+      hasPassword: !!finalCredentials.password
+    } : 'none');
+    
+    if (finalCredentials && (finalCredentials.username || finalCredentials.token)) {
+      console.log('Using credentials for push...');
       // Create a unique session ID for this push operation
       const sessionId = `push_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
       const credentialCacheDir = path.join(__dirname, '../.git-credentials-cache');
@@ -672,9 +742,9 @@ router.post('/push', async (req, res) => {
       
       // Write credentials to temporary file
       const credentialData = {
-        username: credentials.username || '',
-        password: credentials.token || credentials.password || '',
-        token: credentials.token || '',
+        username: finalCredentials.username || '',
+        password: finalCredentials.token || finalCredentials.password || '',
+        token: finalCredentials.token || '',
         timestamp: Date.now()
       };
       
@@ -713,14 +783,46 @@ router.post('/push', async (req, res) => {
       // Set a timeout to clean up after 5 seconds
       setTimeout(cleanup, 5000);
       
+      let tempRemoteName = null;
+      const cleanupTempRemote = async () => {
+        if (tempRemoteName) {
+          try {
+            console.log('Cleaning up temporary remote...');
+            await execAsync(`git remote remove ${tempRemoteName}`, { cwd: projectPath });
+          } catch (e) {
+            // Ignore cleanup errors
+          }
+        }
+      };
+      
       try {
-        const { stdout } = await execAsync(`git push ${remoteName} ${remoteBranch}`, { 
+        // For HTTPS URLs with GitHub, we need to temporarily set the remote URL with credentials
+        let pushCommand = `git push ${remoteName} ${remoteBranch}`;
+        
+        if (remoteUrl.includes('https://') && finalCredentials.token) {
+          // Create a temporary remote with credentials embedded
+          const urlParts = remoteUrl.match(/https:\/\/(.+)/);
+          if (urlParts) {
+            const credentialUrl = `https://${finalCredentials.username}:${finalCredentials.token}@${urlParts[1]}`;
+            tempRemoteName = `temp_push_${Date.now()}`;
+            
+            console.log('Setting temporary remote with credentials...');
+            // Add temporary remote
+            await execAsync(`git remote add ${tempRemoteName} "${credentialUrl}"`, { cwd: projectPath });
+            
+            // Use the temporary remote for push
+            pushCommand = `git push ${tempRemoteName} ${remoteBranch}`;
+          }
+        }
+        
+        const { stdout } = await execAsync(pushCommand, { 
           cwd: projectPath,
           env,
           timeout: 30000 // 30 second timeout
         });
         
-        cleanup(); // Clean up immediately on success
+        cleanup(); // Clean up credential files immediately on success
+        await cleanupTempRemote(); // Clean up temporary remote
         
         res.json({ 
           success: true, 
@@ -729,7 +831,9 @@ router.post('/push', async (req, res) => {
           remoteBranch
         });
       } catch (pushError) {
-        cleanup(); // Clean up on error
+        cleanup(); // Clean up credential files on error
+        await cleanupTempRemote(); // Clean up temporary remote
+        
         throw pushError;
       }
     } else {

@@ -14,8 +14,21 @@ function GitCredentialModal({ isOpen, onClose, onSubmit, remoteType = 'generic',
       setPassword('');
       setShowPassword(false);
       setIsSubmitting(false);
+    } else {
+      // Auto-fill credentials from localStorage when modal opens
+      const cacheKey = `git_credentials_${remoteType}`;
+      const cachedCredentials = localStorage.getItem(cacheKey);
+      if (cachedCredentials) {
+        try {
+          const { username: cachedUsername, password: cachedPassword } = JSON.parse(cachedCredentials);
+          setUsername(cachedUsername || '');
+          setPassword(cachedPassword || '');
+        } catch (error) {
+          console.error('Error loading cached credentials:', error);
+        }
+      }
     }
-  }, [isOpen]);
+  }, [isOpen, remoteType]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -23,6 +36,10 @@ function GitCredentialModal({ isOpen, onClose, onSubmit, remoteType = 'generic',
     
     setIsSubmitting(true);
     try {
+      // Cache credentials in localStorage
+      const cacheKey = `git_credentials_${remoteType}`;
+      localStorage.setItem(cacheKey, JSON.stringify({ username, password }));
+      
       await onSubmit({ username, token: password });
     } finally {
       setIsSubmitting(false);

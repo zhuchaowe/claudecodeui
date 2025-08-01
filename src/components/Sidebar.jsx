@@ -157,6 +157,22 @@ function Sidebar({
     }
   }, [projects, isLoading]);
 
+  // Load cached git credentials when modal opens
+  useEffect(() => {
+    if (showNewProject && projectCreationMode === 'git') {
+      const cachedCredentials = localStorage.getItem('git_credentials_newproject');
+      if (cachedCredentials) {
+        try {
+          const { username, password } = JSON.parse(cachedCredentials);
+          setGitUsername(username || '');
+          setGitPassword(password || '');
+        } catch (error) {
+          console.error('Error loading cached credentials:', error);
+        }
+      }
+    }
+  }, [showNewProject, projectCreationMode]);
+
   // Load project sort order from settings
   useEffect(() => {
     const loadSortOrder = () => {
@@ -405,6 +421,12 @@ function Sidebar({
           alert('Please enter folder name');
           return;
         }
+        
+        // Cache credentials before creating project
+        localStorage.setItem('git_credentials_newproject', JSON.stringify({
+          username: gitUsername.trim(),
+          password: gitPassword.trim()
+        }));
         
         response = await api.createGitProject({
           gitUrl: gitUrl.trim(),

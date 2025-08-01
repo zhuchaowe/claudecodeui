@@ -46,7 +46,7 @@ router.get('/oauth/login-url', (req, res) => {
   const authUrl = `https://github.com/login/oauth/authorize?` +
     `client_id=${GITHUB_CLIENT_ID}&` +
     `redirect_uri=${encodeURIComponent(GITHUB_REDIRECT_URI)}&` +
-    `scope=user:email&` +
+    `scope=user:email%20repo&` +
     `state=${state}`;
 
   res.json({ url: authUrl });
