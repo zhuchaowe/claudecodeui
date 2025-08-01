@@ -20,6 +20,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback, memo } from '
 import ReactMarkdown from 'react-markdown';
 import { useDropzone } from 'react-dropzone';
 import TodoList from './TodoList';
+import FloatingTodoList from './FloatingTodoList';
 import ClaudeLogo from './ClaudeLogo.jsx';
 
 import ClaudeStatus from './ClaudeStatus';
@@ -1204,6 +1205,8 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
   const [slashPosition, setSlashPosition] = useState(-1);
   const [visibleMessageCount, setVisibleMessageCount] = useState(100);
   const [claudeStatus, setClaudeStatus] = useState(null);
+  const [currentTodos, setCurrentTodos] = useState(null);
+  const [showFloatingTodos, setShowFloatingTodos] = useState(false);
 
 
   // Memoized diff calculation to prevent recalculating on every render
@@ -1608,6 +1611,13 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
               if (part.type === 'tool_use') {
                 // Add tool use message
                 const toolInput = part.input ? JSON.stringify(part.input, null, 2) : '';
+                
+                // Check if this is a TodoWrite tool and update floating todos
+                if (part.name === 'TodoWrite' && part.input && part.input.todos) {
+                  setCurrentTodos(part.input.todos);
+                  setShowFloatingTodos(true);
+                }
+                
                 setChatMessages(prev => [...prev, {
                   type: 'assistant',
                   content: '',
@@ -2711,6 +2721,16 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
         </form>
       </div>
     </div>
+    
+    {/* Floating Todo List */}
+    <FloatingTodoList 
+      todos={currentTodos}
+      isVisible={showFloatingTodos}
+      onClose={() => {
+        setShowFloatingTodos(false);
+        setCurrentTodos(null);
+      }}
+    />
     </>
   );
 }

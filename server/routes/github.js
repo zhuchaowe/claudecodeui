@@ -11,7 +11,8 @@ const getGithubConfig = () => ({
   GITHUB_CLIENT_ID: process.env.GITHUB_CLIENT_ID,
   GITHUB_CLIENT_SECRET: process.env.GITHUB_CLIENT_SECRET,
   GITHUB_REDIRECT_URI: process.env.GITHUB_REDIRECT_URI || 'http://localhost:3008/api/github/callback',
-  GITHUB_ALLOWED_ORGS: process.env.GITHUB_ALLOWED_ORGS?.split(',').map(org => org.trim()) || []
+  GITHUB_ALLOWED_ORGS: process.env.GITHUB_ALLOWED_ORGS?.split(',').map(org => org.trim()) || [],
+  GITHUB_REQUIRED_STAR_REPO: process.env.GITHUB_REQUIRED_STAR_REPO
 });
 
 // Store state temporarily (in production, use Redis or similar)
@@ -49,12 +50,43 @@ const checkUserOrganization = async (accessToken, allowedOrgs) => {
   }
 };
 
+// Check if user has starred the required repository
+const checkUserStarredRepo = async (accessToken, requiredRepo) => {
+  if (!requiredRepo) {
+    return true; // No star requirement
+  }
+
+  try {
+    const response = await fetch(`https://api.github.com/user/starred/${requiredRepo}`, {
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Accept': 'application/vnd.github.v3+json'
+      }
+    });
+
+    // 204 means user has starred the repo, 404 means not starred
+    return response.status === 204;
+  } catch (error) {
+    console.error('Error checking user starred repository:', error);
+    return false;
+  }
+};
+
 // Get allowed organizations configuration
 router.get('/allowed-orgs', (req, res) => {
   const { GITHUB_ALLOWED_ORGS } = getGithubConfig();
   res.json({ 
     hasRestrictions: GITHUB_ALLOWED_ORGS.length > 0,
     organizations: GITHUB_ALLOWED_ORGS 
+  });
+});
+
+// Get star requirements configuration
+router.get('/star-requirements', (req, res) => {
+  const { GITHUB_REQUIRED_STAR_REPO } = getGithubConfig();
+  res.json({ 
+    hasStarRequirement: !!GITHUB_REQUIRED_STAR_REPO,
+    repository: GITHUB_REQUIRED_STAR_REPO 
   });
 });
 
@@ -200,7 +232,7 @@ router.get('/callback', async (req, res) => {
 
     // Check if this is a login flow
     if (stateData.isLogin) {
-      const { GITHUB_ALLOWED_ORGS } = getGithubConfig();
+      const { GITHUB_ALLOWED_ORGS, GITHUB_REQUIRED_STAR_REPO } = getGithubConfig();
       
       // Check organization membership if restrictions are configured
       const hasOrgAccess = await checkUserOrganization(accessToken, GITHUB_ALLOWED_ORGS);
@@ -208,6 +240,14 @@ router.get('/callback', async (req, res) => {
       if (!hasOrgAccess) {
         console.log(`User ${githubUser.login} does not belong to allowed organizations:`, GITHUB_ALLOWED_ORGS);
         return res.redirect(`${frontendUrl}/?error=org_access_denied`);
+      }
+      
+      // Check if user has starred the required repository
+      const hasStarredRepo = await checkUserStarredRepo(accessToken, GITHUB_REQUIRED_STAR_REPO);
+      
+      if (!hasStarredRepo) {
+        console.log(`User ${githubUser.login} has not starred the required repository:`, GITHUB_REQUIRED_STAR_REPO);
+        return res.redirect(`${frontendUrl}/?error=star_required&repo=${encodeURIComponent(GITHUB_REQUIRED_STAR_REPO || '')}`);
       }
       
       // Try to find existing user by GitHub username

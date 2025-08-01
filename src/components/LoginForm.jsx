@@ -6,6 +6,7 @@ const LoginForm = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [allowedOrgs, setAllowedOrgs] = useState(null);
+  const [starRequirement, setStarRequirement] = useState(null);
   
   const { login } = useAuth();
 
@@ -24,16 +25,23 @@ const LoginForm = () => {
     }
     
     if (errorParam) {
+      const repoParam = urlParams.get('repo');
       let errorMessage = 'GitHub login failed. Please try again.';
+      
       if (errorParam === 'org_access_denied') {
         errorMessage = 'Access denied. You must be a member of an allowed organization to login.';
+      } else if (errorParam === 'star_required') {
+        errorMessage = repoParam 
+          ? `Access denied. You must star the repository "${repoParam}" to login.`
+          : 'Access denied. You must star the required repository to login.';
       }
+      
       setError(errorMessage);
       window.history.replaceState({}, document.title, window.location.pathname);
     }
   }, []);
 
-  // Fetch allowed organizations on component mount
+  // Fetch allowed organizations and star requirements on component mount
   useEffect(() => {
     const fetchAllowedOrgs = async () => {
       try {
@@ -46,8 +54,21 @@ const LoginForm = () => {
         console.error('Failed to fetch allowed organizations:', error);
       }
     };
+
+    const fetchStarRequirement = async () => {
+      try {
+        const response = await fetch('/api/github/star-requirements');
+        if (response.ok) {
+          const data = await response.json();
+          setStarRequirement(data);
+        }
+      } catch (error) {
+        console.error('Failed to fetch star requirements:', error);
+      }
+    };
     
     fetchAllowedOrgs();
+    fetchStarRequirement();
   }, []);
 
   const handleGithubLogin = async () => {
@@ -103,6 +124,24 @@ const LoginForm = () => {
               </p>
               <p className="text-xs text-blue-600 dark:text-blue-500 mt-1">
                 You must be a member of {allowedOrgs.organizations.length > 1 ? 'one of these organizations' : 'this organization'} to login.
+              </p>
+            </div>
+          )}
+
+          {starRequirement?.hasStarRequirement && (
+            <div className="p-3 bg-yellow-100 dark:bg-yellow-900/20 border border-yellow-300 dark:border-yellow-800 rounded-md">
+              <p className="text-sm text-yellow-700 dark:text-yellow-400">
+                <strong>Required:</strong> You must star the repository <strong>{starRequirement.repository}</strong> to access this application.
+              </p>
+              <p className="text-xs text-yellow-600 dark:text-yellow-500 mt-1">
+                <a 
+                  href={`https://github.com/${starRequirement.repository}`} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="underline hover:no-underline"
+                >
+                  Visit the repository → 
+                </a> and click the "Star" button before logging in.
               </p>
             </div>
           )}

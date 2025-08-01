@@ -141,6 +141,18 @@
       scroll-behavior: auto !important;
     }
   }
+  
+  /* Animation for floating todo list items */
+  @keyframes slideIn {
+    from {
+      opacity: 0;
+      transform: translateX(20px);
+    }
+    to {
+      opacity: 1;
+      transform: translateX(0);
+    }
+  }
 }
 
 @layer utilities {
