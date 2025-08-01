@@ -275,6 +275,16 @@ const projectDb = {
     } catch (err) {
       throw err;
     }
+  },
+  
+  // Get all users (for backup purposes)
+  getAllUsers: () => {
+    try {
+      const rows = db.prepare('SELECT DISTINCT username FROM users WHERE is_active = 1').all();
+      return rows;
+    } catch (err) {
+      throw err;
+    }
   }
 };
 

@@ -37,7 +37,7 @@ import pty from 'node-pty';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
-import { getProjects, getSessions, getSessionMessages, renameProject, deleteSession, deleteProject, removeProjectAccess, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, getUserProjectsDir, encodeProjectPath } from './projects.js';
+import { getProjects, getSessions, getSessionMessages, renameProject, deleteSession, deleteProject, removeProjectAccess, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, getUserProjectsDir, encodeProjectPath, backupProject, restoreProject, backupAllUserProjects, checkAndRestoreMissingProjects } from './projects.js';
 import { projectDb } from './database/db.js';
 import { spawnClaude, abortClaudeSession } from './claude-cli.js';
 import gitRoutes from './routes/git.js';
@@ -1278,6 +1278,26 @@ async function startServer() {
       
       // Projects watchers are now setup per-user when they connect
       console.log('👀 Projects watchers will be setup per-user on connection');
+      
+      // Perform initial backup for all users
+      try {
+        const users = await projectDb.getAllUsers();
+        console.log(`[Backup] Starting initial backup for ${users.length} users...`);
+        
+        for (const user of users) {
+          const restoredCount = await checkAndRestoreMissingProjects(user.username);
+          if (restoredCount > 0) {
+            console.log(`[Startup] Restored ${restoredCount} missing projects for user ${user.username}`);
+          }
+          
+          const backupCount = await backupAllUserProjects(user.username);
+          console.log(`[Startup] Backed up ${backupCount} projects for user ${user.username}`);
+        }
+        
+        console.log('[Backup] Initial backup completed for all users');
+      } catch (error) {
+        console.error('[Backup] Error during initial backup:', error);
+      }
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error);

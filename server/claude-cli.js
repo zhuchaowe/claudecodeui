@@ -3,6 +3,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import os from 'os';
 import { projectDb } from './database/db.js';
+import { backupProject, encodeProjectPath } from './projects.js';
 
 let activeClaudeProcesses = new Map(); // Track active processes by session ID
 
@@ -332,6 +333,14 @@ async function spawnClaude(command, options = {}, ws) {
         exitCode: code,
         isNewSession: !sessionId && !!command // Flag to indicate this was a new session
       }));
+      
+      // Backup project after session completes
+      if (options.projectPath && options.username) {
+        const projectName = encodeProjectPath(options.projectPath);
+        backupProject(options.username, projectName)
+          .then(() => console.log(`[Backup] Project ${projectName} backed up after session`))
+          .catch(err => console.error(`[Backup] Failed to backup project ${projectName}:`, err));
+      }
       
       // Clean up temporary image files if any
       if (claudeProcess.tempImagePaths && claudeProcess.tempImagePaths.length > 0) {

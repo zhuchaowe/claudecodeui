@@ -3,6 +3,7 @@ import fsSync from 'fs';
 import path from 'path';
 import readline from 'readline';
 import { projectDb } from './database/db.js';
+import { execSync } from 'child_process';
 
 // Cache for extracted project directories
 const projectDirectoryCache = new Map();
@@ -49,6 +50,12 @@ function decodeProjectName(name) {
 function getSessionStorageDir() {
   // Session logs are always stored in ~/.claude/projects
   return path.join(process.env.HOME, '.claude/projects');
+}
+
+// Get backup directory for user's projects
+function getBackupDir(username) {
+  const backupBaseDir = process.env.BACKUP_DIR || '/home/claude/projects/.claudecode_backup';
+  return path.join(backupBaseDir, username);
 }
 
 // Get user's projects directory (for backward compatibility with multi-user mode)
@@ -308,6 +315,13 @@ async function getProjects(username) {
   // Use session storage directory for reading project sessions
   const claudeDir = getSessionStorageDir();
   console.log(`[DEBUG] Getting projects for user: ${username}, from session directory: ${claudeDir}`);
+  
+  // Check and restore missing projects from backup first
+  const restoredCount = await checkAndRestoreMissingProjects(username);
+  if (restoredCount > 0) {
+    console.log(`[getProjects] Restored ${restoredCount} missing projects before loading`);
+  }
+  
   const config = await loadProjectConfig(username);
   const projects = [];
   const existingProjects = new Set();
@@ -897,6 +911,122 @@ async function addProjectManually(username, projectPath, displayName = null) {
   };
 }
 
+// Backup a project to the backup directory
+async function backupProject(username, projectName) {
+  const sourceDir = path.join(getSessionStorageDir(), projectName);
+  const backupDir = path.join(getBackupDir(username), projectName);
+  
+  try {
+    // Create backup directory if it doesn't exist
+    await fs.mkdir(path.dirname(backupDir), { recursive: true });
+    
+    // Use rsync for efficient backup (preserves timestamps and only copies changes)
+    try {
+      execSync(`rsync -a --delete "${sourceDir}/" "${backupDir}/"`, { stdio: 'pipe' });
+      console.log(`[Backup] Successfully backed up project ${projectName} for user ${username}`);
+      return true;
+    } catch (rsyncError) {
+      // Fallback to cp if rsync is not available
+      console.warn('[Backup] rsync not available, using cp for backup');
+      execSync(`cp -r "${sourceDir}" "${backupDir}"`, { stdio: 'pipe' });
+      console.log(`[Backup] Successfully backed up project ${projectName} for user ${username} using cp`);
+      return true;
+    }
+  } catch (error) {
+    console.error(`[Backup] Failed to backup project ${projectName} for user ${username}:`, error);
+    return false;
+  }
+}
+
+// Restore a project from backup
+async function restoreProject(username, projectName) {
+  const backupDir = path.join(getBackupDir(username), projectName);
+  const targetDir = path.join(getSessionStorageDir(), projectName);
+  
+  try {
+    // Check if backup exists
+    await fs.access(backupDir);
+    
+    // Create target directory if it doesn't exist
+    await fs.mkdir(path.dirname(targetDir), { recursive: true });
+    
+    // Use rsync for efficient restore
+    try {
+      execSync(`rsync -a "${backupDir}/" "${targetDir}/"`, { stdio: 'pipe' });
+      console.log(`[Restore] Successfully restored project ${projectName} for user ${username}`);
+      return true;
+    } catch (rsyncError) {
+      // Fallback to cp if rsync is not available
+      console.warn('[Restore] rsync not available, using cp for restore');
+      execSync(`cp -r "${backupDir}" "${targetDir}"`, { stdio: 'pipe' });
+      console.log(`[Restore] Successfully restored project ${projectName} for user ${username} using cp`);
+      return true;
+    }
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      console.log(`[Restore] No backup found for project ${projectName} for user ${username}`);
+    } else {
+      console.error(`[Restore] Failed to restore project ${projectName} for user ${username}:`, error);
+    }
+    return false;
+  }
+}
+
+// Backup all projects for a user
+async function backupAllUserProjects(username) {
+  const projects = await getProjects(username);
+  let successCount = 0;
+  
+  for (const project of projects) {
+    if (await backupProject(username, project.name)) {
+      successCount++;
+    }
+  }
+  
+  console.log(`[Backup] Backed up ${successCount}/${projects.length} projects for user ${username}`);
+  return successCount;
+}
+
+// Check and restore missing projects from backup
+async function checkAndRestoreMissingProjects(username) {
+  const sessionDir = getSessionStorageDir();
+  const backupUserDir = getBackupDir(username);
+  let restoredCount = 0;
+  
+  try {
+    // Get list of backed up projects
+    const backedUpProjects = await fs.readdir(backupUserDir, { withFileTypes: true });
+    
+    for (const entry of backedUpProjects) {
+      if (entry.isDirectory()) {
+        const projectName = entry.name;
+        const projectPath = path.join(sessionDir, projectName);
+        
+        try {
+          // Check if project exists in session directory
+          await fs.access(projectPath);
+        } catch (error) {
+          // Project doesn't exist, restore from backup
+          console.log(`[Restore] Project ${projectName} missing, restoring from backup...`);
+          if (await restoreProject(username, projectName)) {
+            restoredCount++;
+          }
+        }
+      }
+    }
+    
+    if (restoredCount > 0) {
+      console.log(`[Restore] Restored ${restoredCount} missing projects for user ${username}`);
+    }
+  } catch (error) {
+    if (error.code !== 'ENOENT') {
+      console.error('[Restore] Error checking for missing projects:', error);
+    }
+  }
+  
+  return restoredCount;
+}
+
 
 export {
   getProjects,
@@ -916,5 +1046,9 @@ export {
   getUserProjectsDir,
   getSessionStorageDir,
   encodeProjectPath,
-  decodeProjectName
+  decodeProjectName,
+  backupProject,
+  restoreProject,
+  backupAllUserProjects,
+  checkAndRestoreMissingProjects
 };
