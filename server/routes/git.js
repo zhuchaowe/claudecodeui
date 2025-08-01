@@ -783,15 +783,13 @@ router.post('/push', async (req, res) => {
       // Set a timeout to clean up after 5 seconds
       setTimeout(cleanup, 5000);
       
-      let tempRemoteName = null;
-      const cleanupTempRemote = async () => {
-        if (tempRemoteName) {
-          try {
-            console.log('Cleaning up temporary remote...');
-            await execAsync(`git remote remove ${tempRemoteName}`, { cwd: projectPath });
-          } catch (e) {
-            // Ignore cleanup errors
-          }
+      const cleanupGitConfig = async () => {
+        try {
+          // Reset git config
+          await execAsync(`git config --unset credential.https://github.com.username`, { cwd: projectPath }).catch(() => {});
+          await execAsync(`git config --unset credential.helper`, { cwd: projectPath }).catch(() => {});
+        } catch (e) {
+          // Ignore cleanup errors
         }
       };
       
@@ -800,26 +798,83 @@ router.post('/push', async (req, res) => {
         let pushCommand = `git push ${remoteName} ${remoteBranch}`;
         
         if (remoteUrl.includes('https://') && finalCredentials.token) {
-          // Create a temporary remote with credentials embedded
+          // Try a different approach - set git config temporarily
+          console.log('Using git config approach for authentication...');
+          
+          // Set git credential helper to use our token
+          const gitCommands = [
+            `git config credential.helper ""`, // Clear any existing helper
+            `git config credential.https://github.com.username ${finalCredentials.username}`,
+          ];
+          
+          for (const cmd of gitCommands) {
+            await execAsync(cmd, { cwd: projectPath });
+          }
+          
+          // Use the original remote with credentials in URL
+          const urlParts = remoteUrl.match(/https:\/\/(.+)/);
+          if (urlParts) {
+            // Create push command with credentials in URL
+            const credentialUrl = `https://${finalCredentials.username}:${finalCredentials.token}@${urlParts[1]}`;
+            pushCommand = `git push "${credentialUrl}" HEAD:refs/heads/${remoteBranch}`;
+            
+            console.log('Push command (credentials hidden):', pushCommand.replace(finalCredentials.token, 'TOKEN_HIDDEN'));
+          }
+        }
+        
+        // First fetch to update remote refs
+        console.log('Fetching latest remote refs...');
+        try {
+          await execAsync(`git fetch ${remoteName}`, { cwd: projectPath, timeout: 10000 });
+        } catch (e) {
+          console.log('Fetch failed:', e.message);
+        }
+        
+        // Check branch status before push
+        const { stdout: branchStatus } = await execAsync('git status -sb', { cwd: projectPath });
+        console.log('Branch status before push:', branchStatus.trim());
+        
+        // Check if there are commits to push
+        const { stdout: unpushedCommits } = await execAsync(`git log ${remoteName}/${remoteBranch}..HEAD --oneline`, { cwd: projectPath }).catch(() => ({ stdout: '' }));
+        console.log('Unpushed commits:', unpushedCommits.trim() || 'None');
+        
+        // Get the actual HEAD commit
+        const { stdout: headCommit } = await execAsync('git rev-parse HEAD', { cwd: projectPath });
+        console.log('Current HEAD commit:', headCommit.trim());
+        
+        // Get the remote branch commit
+        const { stdout: remoteCommit } = await execAsync(`git rev-parse ${remoteName}/${remoteBranch}`, { cwd: projectPath }).catch(() => ({ stdout: 'unknown' }));
+        console.log(`Remote ${remoteName}/${remoteBranch} commit:`, remoteCommit.trim());
+        
+        // Show what we're about to push
+        console.log(`About to push: ${branch} (HEAD) -> ${remoteBranch}`);
+        
+        // First, let's check what the remote actually has
+        if (remoteUrl.includes('https://') && finalCredentials.token) {
           const urlParts = remoteUrl.match(/https:\/\/(.+)/);
           if (urlParts) {
             const credentialUrl = `https://${finalCredentials.username}:${finalCredentials.token}@${urlParts[1]}`;
-            tempRemoteName = `temp_push_${Date.now()}`;
             
-            console.log('Setting temporary remote with credentials...');
-            console.log('Credential URL format:', credentialUrl.replace(finalCredentials.token, 'TOKEN_HIDDEN'));
-            
-            // Add temporary remote
-            const addRemoteCmd = `git remote add ${tempRemoteName} "${credentialUrl}"`;
-            console.log('Add remote command:', addRemoteCmd.replace(finalCredentials.token, 'TOKEN_HIDDEN'));
-            await execAsync(addRemoteCmd, { cwd: projectPath });
-            
-            // Verify remote was added
-            const { stdout: remoteList } = await execAsync('git remote -v', { cwd: projectPath });
-            console.log('Current remotes after adding:', remoteList);
-            
-            // Use the temporary remote for push
-            pushCommand = `git push ${tempRemoteName} ${remoteBranch}`;
+            console.log('Checking remote refs directly...');
+            try {
+              const { stdout: remoteRefs } = await execAsync(`git ls-remote "${credentialUrl}" refs/heads/${remoteBranch}`, { 
+                cwd: projectPath,
+                timeout: 10000
+              });
+              console.log('Remote refs check:', remoteRefs.trim());
+              
+              if (remoteRefs.trim()) {
+                const remoteHash = remoteRefs.trim().split('\t')[0];
+                console.log('Remote HEAD hash:', remoteHash);
+                console.log('Local HEAD hash:', headCommit.trim());
+                
+                if (remoteHash === headCommit.trim()) {
+                  console.log('WARNING: Remote already has this commit!');
+                }
+              }
+            } catch (e) {
+              console.log('Failed to check remote refs:', e.message);
+            }
           }
         }
         
@@ -837,7 +892,7 @@ router.post('/push', async (req, res) => {
         await new Promise(resolve => setTimeout(resolve, 1000));
         
         cleanup(); // Clean up credential files immediately on success
-        await cleanupTempRemote(); // Clean up temporary remote
+        await cleanupGitConfig(); // Clean up git config
         
         res.json({ 
           success: true, 
@@ -847,7 +902,7 @@ router.post('/push', async (req, res) => {
         });
       } catch (pushError) {
         cleanup(); // Clean up credential files on error
-        await cleanupTempRemote(); // Clean up temporary remote
+        await cleanupGitConfig(); // Clean up git config
         
         throw pushError;
       }
