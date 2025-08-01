@@ -833,6 +833,13 @@ const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFile
                         }
                         
                         if (content.length > 300) {
+                          const isVeryLarge = content.length > 10000;
+                          console.log('📊 Rendering large tool result:', {
+                            length: content.length,
+                            isVeryLarge,
+                            toolName: message.toolName
+                          });
+                          
                           return (
                             <details open={autoExpandTools}>
                               <summary className="text-sm text-green-700 dark:text-green-300 cursor-pointer hover:text-green-800 dark:hover:text-green-200 mb-2 flex items-center gap-2">
@@ -840,9 +847,36 @@ const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFile
                                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                                 </svg>
                                 View full output ({content.length} chars)
+                                {isVeryLarge && <span className="text-yellow-600 dark:text-yellow-400">⚡ Large file</span>}
                               </summary>
-                              <div className="mt-2 prose prose-sm max-w-none prose-green dark:prose-invert">
-                                <ReactMarkdown>{content}</ReactMarkdown>
+                              <div className={`mt-2 prose prose-sm max-w-none prose-green dark:prose-invert ${
+                                isVeryLarge ? 'max-h-96 overflow-auto bg-gray-50 dark:bg-gray-900 p-3 rounded' : ''
+                              }`}>
+                                <ReactMarkdown
+                                  components={{
+                                    code: ({node, inline, className, children, ...props}) => {
+                                      const isInline = inline || (node?.position?.start?.line === node?.position?.end?.line);
+                                      
+                                      if (isInline) {
+                                        return (
+                                          <code className="bg-gray-200 dark:bg-gray-700 text-blue-600 dark:text-blue-400 px-1 py-0.5 rounded text-sm font-mono" {...props}>
+                                            {children}
+                                          </code>
+                                        );
+                                      }
+                                      
+                                      return (
+                                        <div className="bg-gray-200 dark:bg-gray-700 p-3 rounded-lg overflow-auto max-h-64 my-2">
+                                          <code className="text-gray-800 dark:text-gray-200 text-sm font-mono block whitespace-pre-wrap break-words" {...props}>
+                                            {children}
+                                          </code>
+                                        </div>
+                                      );
+                                    }
+                                  }}
+                                >
+                                  {content}
+                                </ReactMarkdown>
                               </div>
                             </details>
                           );
@@ -1014,11 +1048,29 @@ const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFile
                             );
                           }
                           
+                          const codeContent = String(children || '');
+                          const isLargeCodeBlock = codeContent.length > 5000;
+                          
+                          // Add logging for large code blocks
+                          if (isLargeCodeBlock) {
+                            console.log('📝 Rendering large code block:', {
+                              length: codeContent.length,
+                              lines: codeContent.split('\n').length
+                            });
+                          }
+                          
                           return (
-                            <div className="bg-gray-100 dark:bg-gray-800 p-3 rounded-lg overflow-hidden my-2">
+                            <div className={`bg-gray-100 dark:bg-gray-800 p-3 rounded-lg my-2 ${
+                              isLargeCodeBlock ? 'max-h-96 overflow-auto' : 'overflow-hidden'
+                            }`}>
                               <code className="text-gray-800 dark:text-gray-200 text-sm font-mono block whitespace-pre-wrap break-words" {...props}>
                                 {children}
                               </code>
+                              {isLargeCodeBlock && (
+                                <div className="text-xs text-gray-500 dark:text-gray-400 mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
+                                  Large code block ({codeContent.length} chars, {codeContent.split('\n').length} lines) - scroll to view all
+                                </div>
+                              )}
                             </div>
                           );
                         },
@@ -1304,7 +1356,33 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
                 isToolUse: true,
                 toolName: part.name,
                 toolInput: JSON.stringify(part.input),
-                toolResult: toolResult ? (typeof toolResult.content === 'string' ? toolResult.content : JSON.stringify(toolResult.content)) : null,
+                toolResult: toolResult ? (() => {
+                  // Enhanced tool result processing with logging
+                  console.log('🔍 Processing tool result for:', part.name, {
+                    contentType: typeof toolResult.content,
+                    contentLength: toolResult.content ? String(toolResult.content).length : 0,
+                    isString: typeof toolResult.content === 'string'
+                  });
+                  
+                  if (typeof toolResult.content === 'string') {
+                    return toolResult.content;
+                  } else if (toolResult.content && typeof toolResult.content === 'object') {
+                    // Handle structured content that might contain markdown
+                    if (toolResult.content.content && typeof toolResult.content.content === 'string') {
+                      console.log('📄 Extracting nested content string');
+                      return toolResult.content.content;
+                    } else if (toolResult.content.text && typeof toolResult.content.text === 'string') {
+                      console.log('📄 Extracting nested text string');
+                      return toolResult.content.text;
+                    } else {
+                      console.log('⚠️ Falling back to JSON stringify for object content');
+                      return JSON.stringify(toolResult.content, null, 2);
+                    }
+                  } else {
+                    console.log('⚠️ Falling back to JSON stringify for non-string content');
+                    return JSON.stringify(toolResult.content);
+                  }
+                })() : null,
                 toolError: toolResult?.isError || false,
                 toolResultTimestamp: toolResult?.timestamp || new Date()
               });
@@ -1325,7 +1403,25 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
 
   // Memoize expensive convertSessionMessages operation
   const convertedMessages = useMemo(() => {
-    return convertSessionMessages(sessionMessages);
+    console.log('🔄 Converting session messages:', {
+      sessionMessageCount: sessionMessages.length,
+      timestamp: new Date().toISOString()
+    });
+    
+    const startTime = performance.now();
+    const converted = convertSessionMessages(sessionMessages);
+    const endTime = performance.now();
+    
+    console.log('✅ Session messages converted:', {
+      convertedCount: converted.length,
+      processingTime: `${(endTime - startTime).toFixed(2)}ms`,
+      hasLargeMessages: converted.some(msg => 
+        (msg.content && msg.content.length > 5000) || 
+        (msg.toolResult && String(msg.toolResult).length > 5000)
+      )
+    });
+    
+    return converted;
   }, [sessionMessages]);
 
   // Define scroll functions early to avoid hoisting issues in useEffect dependencies
@@ -1571,10 +1667,32 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
                 // Find the corresponding tool use and update it with the result
                 setChatMessages(prev => prev.map(msg => {
                   if (msg.isToolUse && msg.toolId === part.tool_use_id) {
+                    // Enhanced tool result processing with logging
+                    console.log('🔄 Updating tool result for:', msg.toolName, {
+                      contentType: typeof part.content,
+                      contentLength: part.content ? String(part.content).length : 0,
+                      isString: typeof part.content === 'string'
+                    });
+                    
+                    let processedContent = part.content;
+                    if (typeof part.content === 'object' && part.content !== null) {
+                      // Handle structured content that might contain markdown
+                      if (part.content.content && typeof part.content.content === 'string') {
+                        console.log('📄 Extracting nested content string from tool result');
+                        processedContent = part.content.content;
+                      } else if (part.content.text && typeof part.content.text === 'string') {
+                        console.log('📄 Extracting nested text string from tool result');
+                        processedContent = part.content.text;
+                      } else {
+                        console.log('⚠️ Converting object to JSON string for tool result');
+                        processedContent = JSON.stringify(part.content, null, 2);
+                      }
+                    }
+                    
                     return {
                       ...msg,
                       toolResult: {
-                        content: part.content,
+                        content: processedContent,
                         isError: part.is_error,
                         timestamp: new Date()
                       }
