@@ -37,6 +37,7 @@ import { promises as fsPromises } from 'fs';
 import { spawn } from 'child_process';
 import os from 'os';
 import pty from 'node-pty';
+import crypto from 'crypto';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
@@ -144,6 +145,40 @@ async function setupProjectsWatcher(username) {
   }
 }
 
+
+// Helper function to clean up old backup files
+async function cleanupOldBackups(backupDir, filePrefix) {
+  try {
+    const files = await fsPromises.readdir(backupDir);
+    const backupFiles = files
+      .filter(f => f.startsWith(filePrefix + '.backup.'))
+      .map(f => ({
+        name: f,
+        path: path.join(backupDir, f),
+        timestamp: parseInt(f.split('.').pop())
+      }))
+      .sort((a, b) => b.timestamp - a.timestamp);
+    
+    // Keep only the last 10 backups
+    const filesToDelete = backupFiles.slice(10);
+    
+    // Also delete backups older than 7 days
+    const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+    for (const file of backupFiles.slice(0, 10)) {
+      if (file.timestamp < sevenDaysAgo) {
+        filesToDelete.push(file);
+      }
+    }
+    
+    // Delete old backup files
+    for (const file of filesToDelete) {
+      await fsPromises.unlink(file.path);
+      console.log('🗑️ Deleted old backup:', file.name);
+    }
+  } catch (error) {
+    console.warn('Error cleaning up backups:', error.message);
+  }
+}
 
 const app = express();
 const server = http.createServer(app);
@@ -578,13 +613,41 @@ app.put('/api/projects/:projectName/file', authenticateToken, async (req, res) =
       return res.status(400).json({ error: 'Content is required' });
     }
     
-    // Create backup of original file
+    // Create backup of original file in external directory
     try {
-      const backupPath = filePath + '.backup.' + Date.now();
+      // Check if file exists before backing up
+      await fsPromises.access(filePath);
+      
+      // Use configured backup directory or default
+      const backupBaseDir = process.env.BACKUP_DIR || path.join(process.env.HOME || '/tmp', '.claudecode_backups');
+      const backupDir = path.join(backupBaseDir, 'files');
+      await fsPromises.mkdir(backupDir, { recursive: true });
+      
+      // Create backup filename with original path info
+      const fileHash = crypto.createHash('md5').update(filePath).digest('hex').substring(0, 8);
+      const originalFileName = path.basename(filePath);
+      const backupPrefix = `${fileHash}_${originalFileName}`;
+      const backupFileName = `${backupPrefix}.backup.${Date.now()}`;
+      const backupPath = path.join(backupDir, backupFileName);
+      
       await fsPromises.copyFile(filePath, backupPath);
       console.log('📋 Created backup:', backupPath);
+      
+      // Store original path info in a metadata file
+      const metadataPath = path.join(backupDir, `${fileHash}.metadata.json`);
+      const metadata = {
+        originalPath: filePath,
+        projectName: projectName,
+        lastBackup: Date.now()
+      };
+      await fsPromises.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+      
+      // Clean up old backups
+      await cleanupOldBackups(backupDir, backupPrefix);
     } catch (backupError) {
-      console.warn('Could not create backup:', backupError.message);
+      if (backupError.code !== 'ENOENT') {
+        console.warn('Could not create backup:', backupError.message);
+      }
     }
     
     // Write the new content

@@ -139,6 +139,22 @@ function Sidebar({
     return () => clearInterval(timer);
   }, []);
 
+  // Auto-refresh projects and sessions every 5 seconds
+  useEffect(() => {
+    const refreshTimer = setInterval(async () => {
+      if (!isRefreshing && onRefresh) {
+        try {
+          // Pass true to indicate this is an auto-refresh
+          await onRefresh(true);
+        } catch (error) {
+          console.error('Auto-refresh failed:', error);
+        }
+      }
+    }, 5000); // Refresh every 5 seconds
+
+    return () => clearInterval(refreshTimer);
+  }, [onRefresh, isRefreshing]);
+
   // Clear additional sessions when projects list changes (e.g., after refresh)
   useEffect(() => {
     setAdditionalSessions({});

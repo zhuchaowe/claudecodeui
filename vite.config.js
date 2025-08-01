@@ -16,15 +16,16 @@ export default defineConfig(({ command, mode }) => {
           target: `ws://localhost:${env.PORT || 3002}`,
           ws: true
         }
-      }
+      },
+	    allowedHosts:["claudecode-dev.gbase.ai"]
     },
     build: {
       outDir: 'dist'
     },
     preview:{
 	host: "0.0.0.0",
-	port: 8080
-
+	port: 8080,
+    allowedHosts:["claudecode-dev.gbase.ai"]
     }
   }
 })

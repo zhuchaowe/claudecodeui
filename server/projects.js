@@ -130,7 +130,7 @@ function getSessionStorageDir() {
 // Get backup directory for user's projects
 function getBackupDir(username) {
   const backupBaseDir = process.env.BACKUP_DIR || '/home/claude/projects/.claudecode_backup';
-  return path.join(backupBaseDir, username);
+  return path.join(backupBaseDir, 'sessions', username);
 }
 
 // Get user's projects directory (for backward compatibility with multi-user mode)

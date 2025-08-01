@@ -309,7 +309,18 @@ function AppContent() {
 
 
 
-  const handleSidebarRefresh = async () => {
+  const handleSidebarRefresh = async (isAutoRefresh = false) => {
+    // If this is an auto-refresh and there's an active session, skip the refresh
+    if (isAutoRefresh) {
+      const hasActiveSession = (selectedSession && activeSessions.has(selectedSession.id)) ||
+                              (activeSessions.size > 0 && Array.from(activeSessions).some(id => id.startsWith('new-session-')));
+      
+      if (hasActiveSession) {
+        // Skip auto-refresh during active conversations to prevent content clearing
+        return;
+      }
+    }
+    
     // Refresh only the sessions for all projects, don't change selected state
     try {
       const response = await api.projects();

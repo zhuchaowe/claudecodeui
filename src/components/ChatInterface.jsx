@@ -115,22 +115,11 @@ const safeLocalStorage = {
 const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFileOpen, onShowSettings, autoExpandTools, showRawParameters }) => {
   // Helper function to render message content with JSON detection
   const renderMessageContent = (content) => {
-    if (!content || typeof content !== 'string') return content;
+    if (!content) return '';
+    if (typeof content !== 'string') return String(content);
     
-    // Check if the entire content looks like JSON
-    const trimmed = content.trim();
-    const isJsonLike = (trimmed.startsWith('{') && trimmed.endsWith('}')) || 
-                       (trimmed.startsWith('[') && trimmed.endsWith(']'));
-    
-    if (isJsonLike) {
-      try {
-        JSON.parse(trimmed);
-        return <CollapsibleJson content={content} />;
-      } catch {
-        // If parsing fails, return original content
-      }
-    }
-    
+    // Don't process JSON content here, just return it as-is
+    // The parent component will handle JSON detection and rendering
     return content;
   };
 
@@ -908,9 +897,29 @@ const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFile
                           );
                         }
                         
+                        const renderedContent = renderMessageContent(content);
+                        
+                        // Check if the content looks like JSON
+                        const trimmed = renderedContent.trim();
+                        const isJsonLike = (trimmed.startsWith('{') && trimmed.endsWith('}')) || 
+                                         (trimmed.startsWith('[') && trimmed.endsWith(']'));
+                        
+                        if (isJsonLike) {
+                          try {
+                            JSON.parse(trimmed);
+                            return (
+                              <div className="prose prose-sm max-w-none prose-green dark:prose-invert">
+                                <CollapsibleJson content={renderedContent} />
+                              </div>
+                            );
+                          } catch {
+                            // If parsing fails, render as markdown
+                          }
+                        }
+                        
                         return (
                           <div className="prose prose-sm max-w-none prose-green dark:prose-invert">
-                            <ReactMarkdown>{renderMessageContent(content)}</ReactMarkdown>
+                            <ReactMarkdown>{renderedContent}</ReactMarkdown>
                           </div>
                         );
                       })()}
@@ -1059,67 +1068,89 @@ const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFile
             ) : (
               <div className="text-sm text-gray-700 dark:text-gray-300">
                 {message.type === 'assistant' ? (
-                  <div className="prose prose-sm max-w-none dark:prose-invert prose-gray">
-                    <ReactMarkdown
-                      components={{
-                        code: ({node, inline, className, children, ...props}) => {
-                          // Check if this is inline code by looking at the parent node
-                          const isInline = inline || (node?.position?.start?.line === node?.position?.end?.line);
-                          
-                          if (isInline) {
-                            return (
-                              <code className="bg-gray-100 dark:bg-gray-800 text-blue-600 dark:text-blue-400 px-1 py-0.5 rounded text-sm font-mono" {...props}>
-                                {children}
-                              </code>
-                            );
-                          }
-                          
-                          const codeContent = String(children || '');
-                          const isLargeCodeBlock = codeContent.length > 5000;
-                          
-                          // Add logging for large code blocks
-                          if (isLargeCodeBlock) {
-                            console.log('📝 Rendering large code block:', {
-                              length: codeContent.length,
-                              lines: codeContent.split('\n').length
-                            });
-                          }
-                          
-                          return (
-                            <div className={`bg-gray-100 dark:bg-gray-800 p-3 rounded-lg my-2 ${
-                              isLargeCodeBlock ? 'max-h-96 overflow-auto' : 'overflow-hidden'
-                            }`}>
-                              <code className="text-gray-800 dark:text-gray-200 text-sm font-mono block whitespace-pre-wrap break-words" {...props}>
-                                {children}
-                              </code>
-                              {isLargeCodeBlock && (
-                                <div className="text-xs text-gray-500 dark:text-gray-400 mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
-                                  Large code block ({codeContent.length} chars, {codeContent.split('\n').length} lines) - scroll to view all
-                                </div>
-                              )}
-                            </div>
-                          );
-                        },
-                        blockquote: ({children}) => (
-                          <blockquote className="border-l-4 border-gray-300 dark:border-gray-600 pl-4 italic text-gray-600 dark:text-gray-400 my-2">
-                            {children}
-                          </blockquote>
-                        ),
-                        a: ({href, children}) => (
-                          <a href={href} className="text-blue-600 dark:text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">
-                            {children}
-                          </a>
-                        ),
-                        p: ({children}) => (
-                          <div className="mb-2 last:mb-0">
-                            {children}
+                  (() => {
+                    const content = renderMessageContent(String(message.content || ''));
+                    const trimmed = content.trim();
+                    const isJsonLike = (trimmed.startsWith('{') && trimmed.endsWith('}')) || 
+                                     (trimmed.startsWith('[') && trimmed.endsWith(']'));
+                    
+                    if (isJsonLike) {
+                      try {
+                        JSON.parse(trimmed);
+                        return (
+                          <div className="prose prose-sm max-w-none dark:prose-invert prose-gray">
+                            <CollapsibleJson content={content} />
                           </div>
-                        )
-                      }}
-                    >
-                      {renderMessageContent(String(message.content || ''))}
-                    </ReactMarkdown>
-                  </div>
+                        );
+                      } catch {
+                        // If parsing fails, render as markdown
+                      }
+                    }
+                    
+                    return (
+                      <div className="prose prose-sm max-w-none dark:prose-invert prose-gray">
+                        <ReactMarkdown
+                          components={{
+                            code: ({node, inline, className, children, ...props}) => {
+                              // Check if this is inline code by looking at the parent node
+                              const isInline = inline || (node?.position?.start?.line === node?.position?.end?.line);
+                              
+                              if (isInline) {
+                                return (
+                                  <code className="bg-gray-100 dark:bg-gray-800 text-blue-600 dark:text-blue-400 px-1 py-0.5 rounded text-sm font-mono" {...props}>
+                                    {children}
+                                  </code>
+                                );
+                              }
+                              
+                              const codeContent = String(children || '');
+                              const isLargeCodeBlock = codeContent.length > 5000;
+                              
+                              // Add logging for large code blocks
+                              if (isLargeCodeBlock) {
+                                console.log('📝 Rendering large code block:', {
+                                  length: codeContent.length,
+                                  lines: codeContent.split('\n').length
+                                });
+                              }
+                              
+                              return (
+                                <div className={`bg-gray-100 dark:bg-gray-800 p-3 rounded-lg my-2 ${
+                                  isLargeCodeBlock ? 'max-h-96 overflow-auto' : 'overflow-hidden'
+                                }`}>
+                                  <code className="text-gray-800 dark:text-gray-200 text-sm font-mono block whitespace-pre-wrap break-words" {...props}>
+                                    {children}
+                                  </code>
+                                  {isLargeCodeBlock && (
+                                    <div className="text-xs text-gray-500 dark:text-gray-400 mt-2 pt-2 border-t border-gray-200 dark:border-gray-600">
+                                      Large code block ({codeContent.length} chars, {codeContent.split('\n').length} lines) - scroll to view all
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            },
+                            blockquote: ({children}) => (
+                              <blockquote className="border-l-4 border-gray-300 dark:border-gray-600 pl-4 italic text-gray-600 dark:text-gray-400 my-2">
+                                {children}
+                              </blockquote>
+                            ),
+                            a: ({href, children}) => (
+                              <a href={href} className="text-blue-600 dark:text-blue-400 hover:underline" target="_blank" rel="noopener noreferrer">
+                                {children}
+                              </a>
+                            ),
+                            p: ({children}) => (
+                              <div className="mb-2 last:mb-0">
+                                {children}
+                              </div>
+                            )
+                          }}
+                        >
+                          {content}
+                        </ReactMarkdown>
+                      </div>
+                    );
+                  })()
                 ) : (
                   <div className="whitespace-pre-wrap">
                     {renderMessageContent(message.content)}
