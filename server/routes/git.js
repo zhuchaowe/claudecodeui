@@ -878,15 +878,19 @@ router.post('/push', async (req, res) => {
           }
         }
         
-        console.log('Executing push command:', pushCommand);
+        // Don't log the actual command as it contains credentials
         const { stdout, stderr } = await execAsync(pushCommand, { 
           cwd: projectPath,
           env,
           timeout: 30000 // 30 second timeout
         });
         
-        console.log('Push stdout:', stdout);
-        console.log('Push stderr:', stderr);
+        // Sanitize output to hide any credentials
+        const sanitizedStdout = stdout ? stdout.replace(/https:\/\/[^:]+:[^@]+@/g, 'https://[CREDENTIALS_HIDDEN]@') : '';
+        const sanitizedStderr = stderr ? stderr.replace(/https:\/\/[^:]+:[^@]+@/g, 'https://[CREDENTIALS_HIDDEN]@') : '';
+        
+        console.log('Push stdout:', sanitizedStdout);
+        console.log('Push stderr:', sanitizedStderr);
         
         // Check if push was successful
         const pushSucceeded = stderr && stderr.includes('->');
