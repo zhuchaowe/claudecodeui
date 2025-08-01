@@ -14,6 +14,37 @@ function clearProjectDirectoryCache() {
   cacheTimestamp = Date.now();
 }
 
+// Encoding function: Convert file path to project name
+// Rules:
+// 1. First escape underscores: _ -> __
+// 2. Then escape hyphens: - -> _
+// 3. Finally replace slashes: / -> -
+function encodeProjectPath(path) {
+  // Must handle underscores first to avoid double processing
+  let encoded = path.replace(/_/g, '__');
+  // Then escape hyphens
+  encoded = encoded.replace(/-/g, '_');
+  // Finally replace slashes with hyphens
+  encoded = encoded.replace(/\//g, '-');
+  return encoded;
+}
+
+// Decoding function: Convert project name back to file path
+// Rules (reverse order):
+// 1. First replace hyphens with slashes: - -> /
+// 2. Then unescape hyphens: _ (not preceded or followed by _) -> -
+// 3. Finally unescape underscores: __ -> _
+function decodeProjectName(name) {
+  // First replace hyphens with slashes
+  let decoded = name.replace(/-/g, '/');
+  // Then handle escaped hyphens (single underscore not part of double underscore)
+  // This regex matches single underscores that are not preceded or followed by another underscore
+  decoded = decoded.replace(/(?<!_)_(?!_)/g, '-');
+  // Finally handle escaped underscores (double underscore)
+  decoded = decoded.replace(/__/g, '_');
+  return decoded;
+}
+
 // Get session storage directory (where claude stores session logs)
 function getSessionStorageDir() {
   // Session logs are always stored in ~/.claude/projects
@@ -62,11 +93,11 @@ async function generateDisplayName(projectName, actualProjectDir = null) {
   let projectPath = actualProjectDir;
   if (!projectPath) {
     if (projectName.startsWith('-home-claude-projects-')) {
-      projectPath = '/' + projectName.substring(1).replace(/-/g, '/');
+      projectPath = decodeProjectName(projectName);
     } else if (projectName.startsWith('/')) {
       projectPath = projectName;
     } else {
-      projectPath = projectName.replace(/-/g, '/');
+      projectPath = decodeProjectName(projectName);
     }
   }
   
@@ -110,7 +141,7 @@ async function extractProjectDirectory(username, projectName) {
   // e.g., -home-claude-claudecodeui represents /home/claude/claudecodeui
   if (projectName.startsWith('-') && !projectName.startsWith('-home-claude-projects-')) {
     // This is a local directory project, convert back to absolute path
-    const absolutePath = '/' + projectName.substring(1).replace(/-/g, '/');
+    const absolutePath = decodeProjectName(projectName);
     projectDirectoryCache.set(projectName, absolutePath);
     return absolutePath;
   }
@@ -154,10 +185,10 @@ async function extractProjectDirectory(username, projectName) {
       // Check if this is a local directory project first
       if (projectName.startsWith('-') && !projectName.startsWith('-home-claude-projects-')) {
         // Local directory project
-        extractedPath = '/' + projectName.substring(1).replace(/-/g, '/');
+        extractedPath = decodeProjectName(projectName);
       } else if (projectName.startsWith('-home-claude-projects-')) {
         // Remove the leading dash and convert to path
-        extractedPath = '/' + projectName.substring(1).replace(/-/g, '/');
+        extractedPath = decodeProjectName(projectName);
       } else if (projectName.startsWith('/')) {
         extractedPath = projectName;
       } else {
@@ -202,9 +233,9 @@ async function extractProjectDirectory(username, projectName) {
         // No cwd found, fall back to decoded project name
         if (projectName.startsWith('-') && !projectName.startsWith('-home-claude-projects-')) {
           // Local directory project
-          extractedPath = '/' + projectName.substring(1).replace(/-/g, '/');
+          extractedPath = decodeProjectName(projectName);
         } else if (projectName.startsWith('-home-claude-projects-')) {
-          extractedPath = '/' + projectName.substring(1).replace(/-/g, '/');
+          extractedPath = decodeProjectName(projectName);
         } else if (projectName.startsWith('/')) {
           extractedPath = projectName;
         } else {
@@ -235,9 +266,9 @@ async function extractProjectDirectory(username, projectName) {
         if (!extractedPath) {
           if (projectName.startsWith('-') && !projectName.startsWith('-home-claude-projects-')) {
             // Local directory project
-            extractedPath = latestCwd || ('/' + projectName.substring(1).replace(/-/g, '/'));
+            extractedPath = latestCwd || decodeProjectName(projectName);
           } else if (projectName.startsWith('-home-claude-projects-')) {
-            extractedPath = latestCwd || ('/' + projectName.substring(1).replace(/-/g, '/'));
+            extractedPath = latestCwd || decodeProjectName(projectName);
           } else if (latestCwd) {
             extractedPath = latestCwd;
           } else {
@@ -375,9 +406,9 @@ async function getProjects(username) {
         } catch (error) {
           // Fall back to decoded project name
           if (projectName.startsWith('-home-claude-projects-')) {
-            actualProjectDir = projectName.substring(1).replace(/-/g, '/');
+            actualProjectDir = decodeProjectName(projectName);
           } else {
-            actualProjectDir = projectName.replace(/-/g, '/');
+            actualProjectDir = decodeProjectName(projectName);
           }
         }
       }
@@ -788,7 +819,7 @@ async function addProjectManually(username, projectPath, displayName = null) {
   }
   
   // Generate project name (encode path for use as directory name)
-  const projectName = absolutePath.replace(/\//g, '-');
+  const projectName = encodeProjectPath(absolutePath);
   
   // Check if this user already has this project configured
   const config = await loadProjectConfig(username);
@@ -883,5 +914,7 @@ export {
   extractProjectDirectory,
   clearProjectDirectoryCache,
   getUserProjectsDir,
-  getSessionStorageDir
+  getSessionStorageDir,
+  encodeProjectPath,
+  decodeProjectName
 };

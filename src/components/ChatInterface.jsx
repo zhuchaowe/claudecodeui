@@ -999,15 +999,22 @@ const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFile
             ) : (
               <div className="text-sm text-gray-700 dark:text-gray-300">
                 {message.type === 'assistant' ? (
-                  <div className="prose prose-sm max-w-none dark:prose-invert prose-gray [&_code]:!bg-transparent [&_code]:!p-0">
+                  <div className="prose prose-sm max-w-none dark:prose-invert prose-gray">
                     <ReactMarkdown
                       components={{
                         code: ({node, inline, className, children, ...props}) => {
-                          return inline ? (
-                            <strong className="text-blue-600 dark:text-blue-400 font-bold not-prose" {...props}>
-                              {children}
-                            </strong>
-                          ) : (
+                          // Check if this is inline code by looking at the parent node
+                          const isInline = inline || (node?.position?.start?.line === node?.position?.end?.line);
+                          
+                          if (isInline) {
+                            return (
+                              <code className="bg-gray-100 dark:bg-gray-800 text-blue-600 dark:text-blue-400 px-1 py-0.5 rounded text-sm font-mono" {...props}>
+                                {children}
+                              </code>
+                            );
+                          }
+                          
+                          return (
                             <div className="bg-gray-100 dark:bg-gray-800 p-3 rounded-lg overflow-hidden my-2">
                               <code className="text-gray-800 dark:text-gray-200 text-sm font-mono block whitespace-pre-wrap break-words" {...props}>
                                 {children}

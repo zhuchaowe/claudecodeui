@@ -37,7 +37,7 @@ import pty from 'node-pty';
 import fetch from 'node-fetch';
 import mime from 'mime-types';
 
-import { getProjects, getSessions, getSessionMessages, renameProject, deleteSession, deleteProject, removeProjectAccess, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, getUserProjectsDir } from './projects.js';
+import { getProjects, getSessions, getSessionMessages, renameProject, deleteSession, deleteProject, removeProjectAccess, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, getUserProjectsDir, encodeProjectPath } from './projects.js';
 import { projectDb } from './database/db.js';
 import { spawnClaude, abortClaudeSession } from './claude-cli.js';
 import gitRoutes from './routes/git.js';
@@ -385,8 +385,18 @@ app.post('/api/projects/create-git', authenticateToken, async (req, res) => {
       // The project will be automatically discovered when the user refreshes the project list
       // Just create the project ownership
       // Encode the target directory path to create session folder name
-      const encodedProjectName = targetDir.replace(/\//g, '-');
-      await projectDb.createProjectOwnership(encodedProjectName, req.user.username);
+      const encodedProjectName = encodeProjectPath(targetDir);
+      
+      // Check if project ownership already exists
+      const existingOwner = await projectDb.getProjectOwner(encodedProjectName);
+      if (!existingOwner) {
+        // No owner yet, assign to this user
+        await projectDb.createProjectOwnership(encodedProjectName, req.user.username);
+      } else if (existingOwner !== req.user.username) {
+        // Project already owned by another user, add this user as a shared user
+        await projectDb.addProjectAccess(encodedProjectName, req.user.username, 'user');
+      }
+      // If existingOwner === req.user.username, the user already owns this project, no action needed
       
       // Create session directory for the project
       const sessionStorageDir = path.join(process.env.HOME, '.claude/projects');
