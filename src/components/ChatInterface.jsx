@@ -110,9 +110,11 @@ const safeLocalStorage = {
 
 // Memoized message component to prevent unnecessary re-renders
 const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFileOpen, onShowSettings, autoExpandTools, showRawParameters }) => {
-  const isGrouped = prevMessage && prevMessage.type === message.type && 
+  // Improved grouping logic: Group consecutive assistant messages together
+  // Only show avatar/nickname for the first assistant message after a user message
+  const isGrouped = prevMessage && 
                    prevMessage.type === 'assistant' && 
-                   !prevMessage.isToolUse && !message.isToolUse;
+                   message.type === 'assistant';
   const messageRef = React.useRef(null);
   const [isExpanded, setIsExpanded] = React.useState(false);
   React.useEffect(() => {

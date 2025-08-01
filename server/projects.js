@@ -17,33 +17,108 @@ function clearProjectDirectoryCache() {
 
 // Encoding function: Convert file path to project name
 // Rules:
-// 1. First escape underscores: _ -> __
-// 2. Then escape hyphens: - -> _
-// 3. Finally replace slashes: / -> -
+// 1. Replace hyphens: - -> -
+// 2. Replace underscores: _ -> -
+// 3. Replace slashes: / -> -
 function encodeProjectPath(path) {
-  // Must handle underscores first to avoid double processing
-  let encoded = path.replace(/_/g, '__');
-  // Then escape hyphens
-  encoded = encoded.replace(/-/g, '_');
-  // Finally replace slashes with hyphens
-  encoded = encoded.replace(/\//g, '-');
+  // Replace hyphens, underscores and slashes with hyphens
+  let encoded = path.replace(/[-_\/]/g, '-');
   return encoded;
 }
 
 // Decoding function: Convert project name back to file path
-// Rules (reverse order):
-// 1. First replace hyphens with slashes: - -> /
-// 2. Then unescape hyphens: _ (not preceded or followed by _) -> -
-// 3. Finally unescape underscores: __ -> _
+// Since -, _ and / are all encoded as -, we need to intelligently
+// determine what each - should be decoded to by checking directory existence
 function decodeProjectName(name) {
-  // First replace hyphens with slashes
-  let decoded = name.replace(/-/g, '/');
-  // Then handle escaped hyphens (single underscore not part of double underscore)
-  // This regex matches single underscores that are not preceded or followed by another underscore
-  decoded = decoded.replace(/(?<!_)_(?!_)/g, '-');
-  // Finally handle escaped underscores (double underscore)
-  decoded = decoded.replace(/__/g, '_');
-  return decoded;
+  // Handle edge cases
+  if (!name || !name.startsWith('-')) {
+    return name;
+  }
+  
+  // Remove leading hyphen and split by hyphens
+  const segments = name.substring(1).split('-');
+  
+  // For paths like /home/claude/projects/username/project-name
+  // We know the first segments should be joined with /
+  let decodedPath = '';
+  let currentIndex = 0;
+  
+  // Build the base path (we know these are directory separators)
+  if (segments[0] === 'home' && segments[1] === 'claude' && segments[2] === 'projects') {
+    decodedPath = '/home/claude/projects';
+    currentIndex = 3;
+    
+    // Add username
+    if (segments.length > 3) {
+      decodedPath += '/' + segments[3];
+      currentIndex = 4;
+    }
+  } else {
+    // For other paths, start with root
+    decodedPath = '/' + segments.join('/');
+    return decodedPath;
+  }
+  
+  // If no more segments, return what we have
+  if (currentIndex >= segments.length) {
+    return decodedPath;
+  }
+  
+  // For the final directory name, we need to try different combinations
+  // because we don't know which hyphens were originally - or _
+  const remainingSegments = segments.slice(currentIndex);
+  
+  // First, check if the directory exists with all hyphens converted to slashes
+  const pathWithSlashes = decodedPath + '/' + remainingSegments.join('/');
+  if (fsSync.existsSync(pathWithSlashes)) {
+    return pathWithSlashes;
+  }
+  
+  // If there's only one remaining segment, try simple variations
+  if (remainingSegments.length === 1) {
+    const dirName = remainingSegments[0];
+    return decodedPath + '/' + dirName;
+  }
+  
+  // For multiple remaining segments, they likely form a single directory name
+  // Try different combinations of - and _
+  const possibleNames = generateDirectoryVariations(remainingSegments);
+  
+  for (const possibleName of possibleNames) {
+    const testPath = decodedPath + '/' + possibleName;
+    if (fsSync.existsSync(testPath)) {
+      return testPath;
+    }
+  }
+  
+  // Default: treat remaining segments as a single directory with hyphens
+  return decodedPath + '/' + remainingSegments.join('-');
+}
+
+// Helper function to generate possible directory name variations
+function generateDirectoryVariations(segments) {
+  const variations = [];
+  
+  // Most common patterns first
+  variations.push(segments.join('-'));           // all hyphens: my-awesome-project
+  variations.push(segments.join('_'));           // all underscores: my_awesome_project
+  
+  // For 2 segments, try both combinations
+  if (segments.length === 2) {
+    variations.push(segments[0] + '_' + segments[1]);  // first_second
+  }
+  
+  // For 3 segments, try common patterns
+  if (segments.length === 3) {
+    variations.push(segments[0] + '_' + segments[1] + '_' + segments[2]);  // all underscores
+    variations.push(segments[0] + '-' + segments[1] + '_' + segments[2]);  // hyphen then underscore
+    variations.push(segments[0] + '_' + segments[1] + '-' + segments[2]);  // underscore then hyphen
+  }
+  
+  // For efficiency, we don't try all 2^(n-1) combinations for larger n
+  // but these patterns should cover most real-world cases
+  
+  return variations;
 }
 
 // Get session storage directory (where claude stores session logs)
@@ -813,6 +888,15 @@ async function deleteProject(username, projectName) {
     const config = await loadProjectConfig(username);
     delete config[projectName];
     await saveProjectConfig(username, config);
+    
+    // Delete backup for this project
+    const backupDir = path.join(getBackupDir(username), projectName);
+    try {
+      await fs.rm(backupDir, { recursive: true, force: true });
+      console.log(`[Delete] Removed backup for project ${projectName}`);
+    } catch (err) {
+      console.warn(`[Delete] Could not delete backup directory ${backupDir}:`, err.message);
+    }
     
     return true;
   } catch (error) {

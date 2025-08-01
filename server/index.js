@@ -295,6 +295,30 @@ app.delete('/api/projects/:projectName', authenticateToken, async (req, res) => 
   }
 });
 
+// Backup all projects endpoint
+app.post('/api/projects/backup', authenticateToken, async (req, res) => {
+  try {
+    const username = req.user.username;
+    console.log(`[API] Manual backup requested by user ${username}`);
+    
+    // First restore any missing projects
+    const restoredCount = await checkAndRestoreMissingProjects(username);
+    
+    // Then backup all projects
+    const backupCount = await backupAllUserProjects(username);
+    
+    res.json({ 
+      success: true, 
+      backedUp: backupCount,
+      restored: restoredCount,
+      message: `Backed up ${backupCount} projects, restored ${restoredCount} missing projects`
+    });
+  } catch (error) {
+    console.error('[API] Backup error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Create project endpoint
 app.post('/api/projects/create', authenticateToken, async (req, res) => {
   try {
@@ -656,6 +680,26 @@ function handleChatConnection(ws) {
   if (!projectsWatchers.has(ws.user.username)) {
     setupProjectsWatcher(ws.user.username);
   }
+  
+  // Perform backup and restore check when user connects (page refresh)
+  (async () => {
+    try {
+      console.log(`[WebSocket] User ${ws.user.username} connected, checking for missing projects...`);
+      
+      // First restore any missing projects from backup
+      const restoredCount = await checkAndRestoreMissingProjects(ws.user.username);
+      if (restoredCount > 0) {
+        console.log(`[WebSocket] Restored ${restoredCount} missing projects for user ${ws.user.username}`);
+      }
+      
+      // Then backup all current projects
+      const backupCount = await backupAllUserProjects(ws.user.username);
+      console.log(`[WebSocket] Backed up ${backupCount} projects for user ${ws.user.username}`);
+      
+    } catch (error) {
+      console.error(`[WebSocket] Error during backup/restore for user ${ws.user.username}:`, error);
+    }
+  })();
   
   ws.on('message', async (message) => {
     try {
