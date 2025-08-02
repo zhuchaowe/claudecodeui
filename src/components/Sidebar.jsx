@@ -3,6 +3,7 @@ import { ScrollArea } from './ui/scroll-area';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Input } from './ui/input';
+import ConfirmDialog from './ConfirmDialog';
 
 import { FolderOpen, Folder, Plus, MessageSquare, Clock, ChevronDown, ChevronRight, Edit3, Check, X, Trash2, Settings, FolderPlus, RefreshCw, Sparkles, Edit2, Star, Search, Github } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -87,6 +88,7 @@ function Sidebar({
   const [editingSessionName, setEditingSessionName] = useState('');
   const [generatingSummary, setGeneratingSummary] = useState({});
   const [searchFilter, setSearchFilter] = useState('');
+  const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, action: null, data: null });
 
   
   // Starred projects state - persisted in localStorage
@@ -345,10 +347,15 @@ function Sidebar({
   };
 
   const deleteSession = async (projectName, sessionId) => {
-    if (!confirm('Are you sure you want to delete this session? This action cannot be undone.')) {
-      return;
-    }
+    setConfirmDialog({
+      isOpen: true,
+      action: 'deleteSession',
+      data: { projectName, sessionId }
+    });
+  };
 
+  const confirmDeleteSession = async () => {
+    const { projectName, sessionId } = confirmDialog.data;
     try {
       const response = await api.deleteSession(projectName, sessionId);
 
@@ -368,15 +375,15 @@ function Sidebar({
   };
 
   const deleteProject = async (project) => {
-    const isShared = project.isShared;
-    const confirmMessage = isShared 
-      ? 'Are you sure you want to remove your access to this shared project? You can re-add it later if needed.'
-      : 'Are you sure you want to delete this project? This will permanently delete the project directory and ALL sessions. This action cannot be undone.';
-    
-    if (!confirm(confirmMessage)) {
-      return;
-    }
+    setConfirmDialog({
+      isOpen: true,
+      action: 'deleteProject',
+      data: { project }
+    });
+  };
 
+  const confirmDeleteProject = async () => {
+    const { project } = confirmDialog.data;
     try {
       const response = await api.deleteProject(project.name);
 
@@ -1736,6 +1743,43 @@ function Sidebar({
           <span className="text-xs">Tools Settings</span>
         </Button>
       </div>
+      
+      {/* Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog({ isOpen: false, action: null, data: null })}
+        onConfirm={() => {
+          if (confirmDialog.action === 'deleteSession') {
+            confirmDeleteSession();
+          } else if (confirmDialog.action === 'deleteProject') {
+            confirmDeleteProject();
+          }
+          setConfirmDialog({ isOpen: false, action: null, data: null });
+        }}
+        title={
+          confirmDialog.action === 'deleteSession' 
+            ? 'Delete Session' 
+            : confirmDialog.data?.project?.isShared 
+              ? 'Remove Project Access'
+              : 'Delete Project'
+        }
+        message={
+          confirmDialog.action === 'deleteSession'
+            ? 'Are you sure you want to delete this session? This action cannot be undone.'
+            : confirmDialog.data?.project?.isShared
+              ? 'Are you sure you want to remove your access to this shared project? You can re-add it later if needed.'
+              : 'Are you sure you want to delete this project? This will permanently delete the project directory and ALL sessions. This action cannot be undone.'
+        }
+        confirmText={
+          confirmDialog.action === 'deleteSession'
+            ? 'Delete Session'
+            : confirmDialog.data?.project?.isShared
+              ? 'Remove Access'
+              : 'Delete Project'
+        }
+        cancelText="Cancel"
+        variant={confirmDialog.action === 'deleteSession' ? 'warning' : 'danger'}
+      />
     </div>
   );
 }

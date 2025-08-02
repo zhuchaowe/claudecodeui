@@ -3,6 +3,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { ScrollArea } from './ui/scroll-area';
 import { Badge } from './ui/badge';
+import ConfirmDialog from './ConfirmDialog';
 import { X, Plus, Settings, Shield, AlertTriangle, Moon, Sun, Server, Edit3, Trash2, Play, Globe, Terminal, Zap, LogOut, User } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -44,6 +45,7 @@ function ToolsSettings({ isOpen, onClose }) {
   const [mcpServerTools, setMcpServerTools] = useState({});
   const [mcpToolsLoading, setMcpToolsLoading] = useState({});
   const [activeTab, setActiveTab] = useState('tools');
+  const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, action: null, data: null });
 
   // Common tool patterns
   const commonTools = [
@@ -414,14 +416,21 @@ function ToolsSettings({ isOpen, onClose }) {
   };
 
   const handleMcpDelete = async (serverId, scope) => {
-    if (confirm('Are you sure you want to delete this MCP server?')) {
-      try {
-        await deleteMcpServer(serverId, scope);
-        setSaveStatus('success');
-      } catch (error) {
-        alert(`Error: ${error.message}`);
-        setSaveStatus('error');
-      }
+    setConfirmDialog({
+      isOpen: true,
+      action: 'deleteMcp',
+      data: { serverId, scope }
+    });
+  };
+
+  const confirmDeleteMcp = async () => {
+    const { serverId, scope } = confirmDialog.data;
+    try {
+      await deleteMcpServer(serverId, scope);
+      setSaveStatus('success');
+    } catch (error) {
+      alert(`Error: ${error.message}`);
+      setSaveStatus('error');
     }
   };
 
@@ -1287,10 +1296,11 @@ function ToolsSettings({ isOpen, onClose }) {
                     </p>
                     <Button
                       onClick={() => {
-                        if (confirm('Are you sure you want to logout?')) {
-                          logout();
-                          onClose();
-                        }
+                        setConfirmDialog({
+                          isOpen: true,
+                          action: 'logout',
+                          data: {}
+                        });
                       }}
                       className="w-full sm:w-auto bg-red-600 hover:bg-red-700 text-white"
                     >
@@ -1350,6 +1360,38 @@ function ToolsSettings({ isOpen, onClose }) {
           </div>
         </div>
       </div>
+      
+      {/* Confirmation Dialog */}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        onClose={() => setConfirmDialog({ isOpen: false, action: null, data: null })}
+        onConfirm={() => {
+          if (confirmDialog.action === 'deleteMcp') {
+            confirmDeleteMcp();
+          } else if (confirmDialog.action === 'logout') {
+            logout();
+            onClose();
+          }
+          setConfirmDialog({ isOpen: false, action: null, data: null });
+        }}
+        title={
+          confirmDialog.action === 'deleteMcp'
+            ? 'Delete MCP Server'
+            : 'Logout'
+        }
+        message={
+          confirmDialog.action === 'deleteMcp'
+            ? 'Are you sure you want to delete this MCP server?'
+            : 'Are you sure you want to logout?'
+        }
+        confirmText={
+          confirmDialog.action === 'deleteMcp'
+            ? 'Delete'
+            : 'Logout'
+        }
+        cancelText="Cancel"
+        variant={confirmDialog.action === 'logout' ? 'danger' : 'warning'}
+      />
     </div>
   );
 }
