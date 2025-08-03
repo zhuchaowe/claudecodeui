@@ -81,6 +81,8 @@ function Sidebar({
   const [giteaRepos, setGiteaRepos] = useState([]);
   const [selectedGiteaRepo, setSelectedGiteaRepo] = useState(null);
   const [loadingGiteaRepos, setLoadingGiteaRepos] = useState(false);
+  const [githubConfigured, setGithubConfigured] = useState(false);
+  const [giteaConfigured, setGiteaConfigured] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState({});
   const [additionalSessions, setAdditionalSessions] = useState({});
   const [initialSessionsLoaded, setInitialSessionsLoaded] = useState(new Set());
@@ -159,6 +161,38 @@ function Sidebar({
     }, 60000); // Update every 60 seconds
 
     return () => clearInterval(timer);
+  }, []);
+
+  // Check GitHub and Gitea configuration on mount
+  useEffect(() => {
+    const checkAuthConfig = async () => {
+      try {
+        // Check GitHub configuration
+        const githubResponse = await fetch('/api/github/config-status');
+        if (githubResponse.ok) {
+          const githubData = await githubResponse.json();
+          setGithubConfigured(githubData.isConfigured);
+        }
+        
+        // Check Gitea configuration
+        const giteaResponse = await fetch('/api/gitea/config-status');
+        if (giteaResponse.ok) {
+          const giteaData = await giteaResponse.json();
+          setGiteaConfigured(giteaData.isConfigured);
+          
+          // Set default mode based on configuration
+          if (giteaData.isConfigured && !githubData.isConfigured) {
+            setProjectCreationMode('gitea');
+          } else if (!giteaData.isConfigured && !githubData.isConfigured) {
+            setProjectCreationMode('git');
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch auth configuration:', error);
+      }
+    };
+    
+    checkAuthConfig();
   }, []);
 
   // Auto-refresh projects and sessions every 5 seconds
@@ -704,30 +738,34 @@ function Sidebar({
             
             {/* Tabs for different creation modes */}
             <div className="flex gap-1 p-1 bg-muted rounded-md">
-              <button
-                className={cn(
-                  "flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors",
-                  projectCreationMode === 'github' 
-                    ? "bg-background text-foreground shadow-sm" 
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-                onClick={() => setProjectCreationMode('github')}
-              >
-                <Github className="w-3 h-3 inline-block mr-1" />
-                GitHub
-              </button>
-              <button
-                className={cn(
-                  "flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors",
-                  projectCreationMode === 'gitea' 
-                    ? "bg-background text-foreground shadow-sm" 
-                    : "text-muted-foreground hover:text-foreground"
-                )}
-                onClick={() => setProjectCreationMode('gitea')}
-              >
-                <GitBranch className="w-3 h-3 inline-block mr-1" />
-                Gitea
-              </button>
+              {githubConfigured && (
+                <button
+                  className={cn(
+                    "flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors",
+                    projectCreationMode === 'github' 
+                      ? "bg-background text-foreground shadow-sm" 
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                  onClick={() => setProjectCreationMode('github')}
+                >
+                  <Github className="w-3 h-3 inline-block mr-1" />
+                  GitHub
+                </button>
+              )}
+              {giteaConfigured && (
+                <button
+                  className={cn(
+                    "flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors",
+                    projectCreationMode === 'gitea' 
+                      ? "bg-background text-foreground shadow-sm" 
+                      : "text-muted-foreground hover:text-foreground"
+                  )}
+                  onClick={() => setProjectCreationMode('gitea')}
+                >
+                  <GitBranch className="w-3 h-3 inline-block mr-1" />
+                  Gitea
+                </button>
+              )}
               <button
                 className={cn(
                   "flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors",
@@ -975,28 +1013,32 @@ function Sidebar({
               
               {/* Mobile tabs */}
               <div className="flex gap-1 p-1 bg-muted rounded-md">
-                <button
-                  className={cn(
-                    "flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors",
-                    projectCreationMode === 'github' 
-                      ? "bg-background text-foreground shadow-sm" 
-                      : "text-muted-foreground"
-                  )}
-                  onClick={() => setProjectCreationMode('github')}
-                >
-                  GitHub
-                </button>
-                <button
-                  className={cn(
-                    "flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors",
-                    projectCreationMode === 'gitea' 
-                      ? "bg-background text-foreground shadow-sm" 
-                      : "text-muted-foreground"
-                  )}
-                  onClick={() => setProjectCreationMode('gitea')}
-                >
-                  Gitea
-                </button>
+                {githubConfigured && (
+                  <button
+                    className={cn(
+                      "flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors",
+                      projectCreationMode === 'github' 
+                        ? "bg-background text-foreground shadow-sm" 
+                        : "text-muted-foreground"
+                    )}
+                    onClick={() => setProjectCreationMode('github')}
+                  >
+                    GitHub
+                  </button>
+                )}
+                {giteaConfigured && (
+                  <button
+                    className={cn(
+                      "flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors",
+                      projectCreationMode === 'gitea' 
+                        ? "bg-background text-foreground shadow-sm" 
+                        : "text-muted-foreground"
+                    )}
+                    onClick={() => setProjectCreationMode('gitea')}
+                  >
+                    Gitea
+                  </button>
+                )}
                 <button
                   className={cn(
                     "flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors",
