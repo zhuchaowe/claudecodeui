@@ -588,17 +588,6 @@ app.post('/api/projects/create-git', authenticateToken, async (req, res) => {
               await projectDb.addProjectAccess(encodedProjectName, req.user.username, 'user');
             }
             
-            // Create session directory for the project
-            const sessionStorageDir = path.join(process.env.HOME, '.claude/projects');
-            const projectSessionDir = path.join(sessionStorageDir, encodedProjectName);
-            
-            try {
-              await fsPromises.mkdir(projectSessionDir, { recursive: true });
-              console.log(`[Git Clone ${cloneSessionId}] Created session directory: ${projectSessionDir}`);
-            } catch (err) {
-              console.error(`[Git Clone ${cloneSessionId}] Error creating session directory:`, err);
-            }
-            
             // Return project info
             const project = {
               name: encodedProjectName,

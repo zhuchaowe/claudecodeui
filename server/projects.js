@@ -411,138 +411,41 @@ async function extractProjectDirectory(username, projectName) {
 }
 
 async function getProjects(username) {
-  // Use session storage directory for reading project sessions
-  const claudeDir = getSessionStorageDir();
-  console.log(`[DEBUG] Getting projects for user: ${username}, from session directory: ${claudeDir}`);
-  
-  // Check and restore missing projects from backup first
-  const restoredCount = await checkAndRestoreMissingProjects(username);
-  if (restoredCount > 0) {
-    console.log(`[getProjects] Restored ${restoredCount} missing projects before loading`);
-  }
+  console.log(`[DEBUG] Getting projects for user: ${username}`);
   
   const config = await loadProjectConfig(username);
   const projects = [];
-  const existingProjects = new Set();
   
-  // Get projects owned by this user
-  const ownedProjects = await projectDb.getProjectsByOwner(username);
-  const ownedProjectNames = new Set(ownedProjects.map(p => p.project_name));
-  
-  // Get all projects this user has access to (including shared)
+  // Get all projects this user has access to from database
   const accessibleProjects = await projectDb.getProjectsWithAccess(username);
-  const accessibleProjectNames = new Set(accessibleProjects.map(p => p.project_name));
+  console.log(`[DEBUG] Found ${accessibleProjects.length} accessible projects for user ${username}`);
   
-  try {
-    // Ensure directory exists
-    await fs.mkdir(claudeDir, { recursive: true });
+  // Process each project from database
+  for (const dbProject of accessibleProjects) {
+    const projectName = dbProject.project_name;
+    const projectOwner = dbProject.owner_username || dbProject.owner;
     
-    // First, get existing projects from the file system
-    const entries = await fs.readdir(claudeDir, { withFileTypes: true });
-    console.log(`[DEBUG] Found ${entries.length} entries in ${claudeDir}`);
-    
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        existingProjects.add(entry.name);
-        
-        // Check if this user has access to this project
-        const projectOwner = await projectDb.getProjectOwner(entry.name);
-        const hasAccess = await projectDb.hasProjectAccess(entry.name, username);
-        
-        if (!projectOwner) {
-          // If project has no owner, assign it to the first user who accesses it
-          try {
-            await projectDb.createProjectOwnership(entry.name, username);
-            console.log(`Assigned unowned project ${entry.name} to user ${username}`);
-          } catch (err) {
-            // Another user might have claimed it concurrently
-            const newOwner = await projectDb.getProjectOwner(entry.name);
-            if (newOwner && newOwner !== username && !hasAccess) {
-              continue; // Skip if now owned by another user and no access
-            }
-          }
-        } else if (projectOwner !== username && !hasAccess) {
-          // Skip projects owned by other users that this user doesn't have access to
-          continue;
-        }
-        
-        const projectPath = path.join(claudeDir, entry.name);
-        
-        // Extract actual project directory from JSONL sessions
-        const actualProjectDir = await extractProjectDirectory(username, entry.name);
-        
-        // Get display name from config or generate one
-        const customName = config[entry.name]?.displayName;
-        const autoDisplayName = await generateDisplayName(entry.name, actualProjectDir);
-        const fullPath = actualProjectDir;
-        
-        const project = {
-          name: entry.name,
-          path: actualProjectDir,
-          displayName: customName || autoDisplayName,
-          fullPath: fullPath,
-          isCustomName: !!customName,
-          owner: projectOwner || username, // Default to current user if no owner
-          isShared: projectOwner && projectOwner !== username,
-          accessLevel: projectOwner === username ? 'owner' : 'user',
-          sessions: []
-        };
-        
-        // Try to get sessions for this project (just first 5 for performance)
-        try {
-          const sessionResult = await getSessions(username, entry.name, 5, 0);
-          project.sessions = sessionResult.sessions || [];
-          project.sessionMeta = {
-            hasMore: sessionResult.hasMore,
-            total: sessionResult.total
-          };
-        } catch (e) {
-          console.warn(`Could not load sessions for project ${entry.name}:`, e.message);
-        }
-        
-        projects.push(project);
-      }
-    }
-  } catch (error) {
-    console.error('Error reading projects directory:', error);
-  }
-  
-  // Add manually configured projects that don't exist as folders yet
-  for (const [projectName, projectConfig] of Object.entries(config)) {
-    if (!existingProjects.has(projectName) && projectConfig.manuallyAdded) {
-      // Use the original path if available, otherwise extract from potential sessions
-      let actualProjectDir = projectConfig.originalPath;
+    try {
+      // Extract actual project directory
+      const actualProjectDir = await extractProjectDirectory(username, projectName);
       
-      if (!actualProjectDir) {
-        try {
-          actualProjectDir = await extractProjectDirectory(username, projectName);
-        } catch (error) {
-          // Fall back to decoded project name
-          if (projectName.startsWith('-home-claude-projects-')) {
-            actualProjectDir = safeDecodeProjectName(projectName);
-          } else {
-            actualProjectDir = safeDecodeProjectName(projectName);
-          }
-        }
-      }
-      
-      // Get ownership information for manually added projects
-      const projectOwner = await projectDb.getProjectOwner(projectName);
+      // Get display name from config or generate one
+      const customName = config[projectName]?.displayName;
+      const autoDisplayName = await generateDisplayName(projectName, actualProjectDir);
       
       const project = {
-          name: projectName,
-          path: actualProjectDir,
-          displayName: projectConfig.displayName || await generateDisplayName(projectName, actualProjectDir),
-          fullPath: actualProjectDir,
-          isCustomName: !!projectConfig.displayName,
-          isManuallyAdded: true,
-          owner: projectOwner || username,
-          isShared: projectOwner && projectOwner !== username,
-          accessLevel: projectOwner === username ? 'owner' : 'user',
-          sessions: []
-        };
+        name: projectName,
+        path: actualProjectDir,
+        displayName: customName || autoDisplayName,
+        fullPath: actualProjectDir,
+        isCustomName: !!customName,
+        owner: projectOwner,
+        isShared: projectOwner !== username,
+        accessLevel: dbProject.access_level || (projectOwner === username ? 'owner' : 'user'),
+        sessions: []
+      };
       
-      // Try to get sessions for manually added projects too
+      // Try to get sessions for this project (just first 5 for performance)
       try {
         const sessionResult = await getSessions(username, projectName, 5, 0);
         project.sessions = sessionResult.sessions || [];
@@ -551,12 +454,17 @@ async function getProjects(username) {
           total: sessionResult.total
         };
       } catch (e) {
-        console.warn(`Could not load sessions for manually added project ${projectName}:`, e.message);
+        console.warn(`Could not load sessions for project ${projectName}:`, e.message);
       }
       
       projects.push(project);
+    } catch (error) {
+      console.error(`Error processing project ${projectName}:`, error);
     }
   }
+  
+  // Sort projects by name
+  projects.sort((a, b) => a.displayName.localeCompare(b.displayName));
   
   return projects;
 }
