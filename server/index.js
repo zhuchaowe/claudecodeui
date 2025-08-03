@@ -436,7 +436,8 @@ app.post('/api/projects/create-git', authenticateToken, async (req, res) => {
       if (!gitPassword || !gitPassword.trim()) {
         return res.status(400).json({ error: 'Git password is required' });
       }
-      gitUrlWithAuth = gitUrl.replace(/^https:\/\//, `https://${encodeURIComponent(gitUsername)}:${encodeURIComponent(gitPassword)}@`);
+      // Support both http and https URLs
+      gitUrlWithAuth = gitUrl.replace(/^(https?):\/\//, `$1://${encodeURIComponent(gitUsername)}:${encodeURIComponent(gitPassword)}@`);
     }
     
     // Create projects directory structure

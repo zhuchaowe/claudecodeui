@@ -596,7 +596,8 @@ function Sidebar({
           gitUsername: gitUsername.trim(),
           gitPassword: gitPassword.trim(),
           folderName: folderName.trim(),
-          useOAuth: false
+          useOAuth: false,
+          provider: 'git' // Generic git provider
         });
       } else if (projectCreationMode === 'local') {
         // Local directory mode
