@@ -474,11 +474,21 @@ app.post('/api/projects/create-git', authenticateToken, async (req, res) => {
         ...data
       });
       
+      console.log(`[Git Clone ${cloneSessionId}] Sending progress to WebSocket clients:`, {
+        connectedClientsCount: connectedClients.size,
+        messageType: data.status,
+        username: req.user.username
+      });
+      
+      let sentCount = 0;
       connectedClients.forEach((clientInfo, ws) => {
         if (clientInfo.username === req.user.username && ws.readyState === ws.OPEN) {
           ws.send(progressMessage);
+          sentCount++;
         }
       });
+      
+      console.log(`[Git Clone ${cloneSessionId}] Sent to ${sentCount} clients`);
     };
     
     // Send initial status

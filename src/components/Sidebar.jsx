@@ -290,8 +290,10 @@ function Sidebar({
   
   // Handle WebSocket messages for clone progress
   useEffect(() => {
+    console.log('[Sidebar] WebSocket messages:', messages);
     const lastMessage = messages[messages.length - 1];
     if (lastMessage && lastMessage.type === 'clone-progress') {
+      console.log('[Sidebar] Clone progress message:', lastMessage);
       setCloneProgress(lastMessage);
       
       // Clear progress when completed or error
