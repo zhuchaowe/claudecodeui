@@ -372,7 +372,7 @@ async function spawnClaude(command, options = {}, ws) {
       
       // Backup project after session completes
       if (options.projectPath && options.username) {
-        const projectName = encodeProjectPath(options.projectPath);
+        const projectName = encodeProjectPath(options.projectPath, options.username);
         backupProject(options.username, projectName)
           .then(() => console.log(`[Backup] Project ${projectName} backed up after session`))
           .catch(err => console.error(`[Backup] Failed to backup project ${projectName}:`, err));

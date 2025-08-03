@@ -11,6 +11,7 @@ const DB_PATH = path.join(__dirname, 'auth.db');
 const INIT_SQL_PATH = path.join(__dirname, 'init.sql');
 const PROJECTS_SQL_PATH = path.join(__dirname, 'projects-ownership.sql');
 const SHARED_PROJECTS_SQL_PATH = path.join(__dirname, 'migrate-shared-projects.sql');
+const PATH_MAPPINGS_SQL_PATH = path.join(__dirname, 'path-mappings.sql');
 
 // Create database connection
 const db = new Database(DB_PATH);
@@ -87,6 +88,10 @@ const initializeDatabase = async () => {
     // Initialize shared projects table
     const sharedProjectsSQL = fs.readFileSync(SHARED_PROJECTS_SQL_PATH, 'utf8');
     db.exec(sharedProjectsSQL);
+    
+    // Initialize path mappings table
+    const pathMappingsSQL = fs.readFileSync(PATH_MAPPINGS_SQL_PATH, 'utf8');
+    db.exec(pathMappingsSQL);
     
     // Run any necessary migrations
     runMigrations();
@@ -353,6 +358,82 @@ const getUserById = (userId) => {
   }
 };
 
+// Path mapping database operations
+const pathMappingDb = {
+  // Save a path mapping
+  saveMapping: (encodedPath, originalPath, username) => {
+    try {
+      const stmt = db.prepare(`
+        INSERT OR REPLACE INTO project_path_mappings 
+        (encoded_path, original_path, username, last_accessed) 
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+      `);
+      const result = stmt.run(encodedPath, originalPath, username);
+      return { id: result.lastInsertRowid, encodedPath, originalPath };
+    } catch (err) {
+      console.error('Error saving path mapping:', err);
+      throw err;
+    }
+  },
+
+  // Get original path from encoded path
+  getOriginalPath: (encodedPath) => {
+    try {
+      const stmt = db.prepare(`
+        SELECT original_path 
+        FROM project_path_mappings 
+        WHERE encoded_path = ?
+      `);
+      const row = stmt.get(encodedPath);
+      
+      // Update last accessed time if found
+      if (row) {
+        db.prepare(`
+          UPDATE project_path_mappings 
+          SET last_accessed = CURRENT_TIMESTAMP 
+          WHERE encoded_path = ?
+        `).run(encodedPath);
+      }
+      
+      return row ? row.original_path : null;
+    } catch (err) {
+      console.error('Error getting original path:', err);
+      throw err;
+    }
+  },
+
+  // Get encoded path from original path
+  getEncodedPath: (originalPath, username) => {
+    try {
+      const stmt = db.prepare(`
+        SELECT encoded_path 
+        FROM project_path_mappings 
+        WHERE original_path = ? AND username = ?
+      `);
+      const row = stmt.get(originalPath, username);
+      return row ? row.encoded_path : null;
+    } catch (err) {
+      console.error('Error getting encoded path:', err);
+      throw err;
+    }
+  },
+
+  // Delete old mappings (cleanup)
+  deleteOldMappings: (daysOld = 30) => {
+    try {
+      const stmt = db.prepare(`
+        DELETE FROM project_path_mappings 
+        WHERE last_accessed < datetime('now', '-' || ? || ' days')
+      `);
+      const result = stmt.run(daysOld);
+      return result.changes;
+    } catch (err) {
+      console.error('Error deleting old mappings:', err);
+      throw err;
+    }
+  }
+};
+
 // Run migrations on existing databases immediately
 try {
   const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
@@ -368,6 +449,7 @@ export {
   initializeDatabase,
   userDb,
   projectDb,
+  pathMappingDb,
   updateUserGithubToken,
   updateUserGiteaToken,
   getUserById

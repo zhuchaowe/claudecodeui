@@ -10,7 +10,7 @@ NC='\033[0m' # No Color
 # Set default environment variables
 export PROJECTS_DIR=${PROJECTS_DIR:-/app/data/projects}
 export BACKUP_DIR=${BACKUP_DIR:-/app/data/backup}
-export PORT=${PORT:-3009}
+export PORT=${UI_PORT:-3009}
 
 # Create necessary directories if they don't exist
 mkdir -p "$PROJECTS_DIR" "$BACKUP_DIR" /app/logs /app/server/database

@@ -2,7 +2,7 @@ import { promises as fs } from 'fs';
 import fsSync from 'fs';
 import path from 'path';
 import readline from 'readline';
-import { projectDb } from './database/db.js';
+import { projectDb, pathMappingDb } from './database/db.js';
 import { execSync } from 'child_process';
 
 // Cache for extracted project directories
@@ -15,21 +15,52 @@ function clearProjectDirectoryCache() {
   cacheTimestamp = Date.now();
 }
 
-// Encoding function: Convert file path to project name
-// Rules:
-// 1. Replace hyphens: - -> -
-// 2. Replace underscores: _ -> -
-// 3. Replace slashes: / -> -
-function encodeProjectPath(path) {
-  // Replace hyphens, underscores and slashes with hyphens
-  let encoded = path.replace(/[-_\/]/g, '-');
+// Simple encoding function: Convert file path to project name
+// Just replace all non-alphanumeric chars with hyphens and use database for mapping
+function encodeProjectPath(path, username = null) {
+  // Simple encoding: replace all special chars with hyphens
+  let encoded = path.replace(/[^a-zA-Z0-9]/g, '-');
+  // Remove multiple consecutive hyphens
+  encoded = encoded.replace(/-+/g, '-');
+  // Remove leading/trailing hyphens
+  encoded = encoded.replace(/^-+|-+$/g, '');
+  
+  // Save mapping to database if username provided
+  if (username) {
+    try {
+      pathMappingDb.saveMapping(encoded, path, username);
+    } catch (err) {
+      console.error('Error saving path mapping:', err);
+    }
+  }
+  
   return encoded;
 }
 
-// Decoding function: Convert project name back to file path
-// Since -, _ and / are all encoded as -, we need to intelligently
-// determine what each - should be decoded to by checking directory existence
-function decodeProjectName(name) {
+// Decoding function: Get original path from database
+function decodeProjectName(encodedName) {
+  // Handle edge cases
+  if (!encodedName || typeof encodedName !== 'string') {
+    return encodedName;
+  }
+  
+  try {
+    // First try to get from database
+    const originalPath = pathMappingDb.getOriginalPath(encodedName);
+    if (originalPath) {
+      return originalPath;
+    }
+  } catch (err) {
+    console.error('Error getting path from database:', err);
+  }
+  
+  // Fallback to legacy decoding for old projects
+  return decodeLegacyProjectName(encodedName);
+}
+
+// Helper function for backward compatibility with old encoded names
+// This is only used as a fallback for legacy encoded project names
+function decodeLegacyProjectName(name) {
   // Handle edge cases
   if (!name || !name.startsWith('-')) {
     return name;
@@ -64,8 +95,7 @@ function decodeProjectName(name) {
     return decodedPath;
   }
   
-  // For the final directory name, we need to try different combinations
-  // because we don't know which hyphens were originally - or _
+  // For the final directory name, try simple patterns
   const remainingSegments = segments.slice(currentIndex);
   
   // First, check if the directory exists with all hyphens converted to slashes
@@ -74,51 +104,21 @@ function decodeProjectName(name) {
     return pathWithSlashes;
   }
   
-  // If there's only one remaining segment, try simple variations
-  if (remainingSegments.length === 1) {
-    const dirName = remainingSegments[0];
-    return decodedPath + '/' + dirName;
-  }
-  
-  // For multiple remaining segments, they likely form a single directory name
-  // Try different combinations of - and _
-  const possibleNames = generateDirectoryVariations(remainingSegments);
-  
-  for (const possibleName of possibleNames) {
-    const testPath = decodedPath + '/' + possibleName;
-    if (fsSync.existsSync(testPath)) {
-      return testPath;
-    }
-  }
-  
-  // Default: treat remaining segments as a single directory with hyphens
+  // Try joining remaining segments with hyphens
   return decodedPath + '/' + remainingSegments.join('-');
 }
 
-// Helper function to generate possible directory name variations
-function generateDirectoryVariations(segments) {
-  const variations = [];
+// Wrapper function that tries new decoding first, then falls back to legacy
+function safeDecodeProjectName(name) {
+  // First try the new unambiguous decoding
+  const decoded = decodeProjectName(name);
   
-  // Most common patterns first
-  variations.push(segments.join('-'));           // all hyphens: my-awesome-project
-  variations.push(segments.join('_'));           // all underscores: my_awesome_project
-  
-  // For 2 segments, try both combinations
-  if (segments.length === 2) {
-    variations.push(segments[0] + '_' + segments[1]);  // first_second
+  // If it looks like a legacy encoded name (all single hyphens), try legacy decode
+  if (decoded === name && name.includes('-') && !name.includes('--') && !name.includes('-_')) {
+    return decodeLegacyProjectName(name);
   }
   
-  // For 3 segments, try common patterns
-  if (segments.length === 3) {
-    variations.push(segments[0] + '_' + segments[1] + '_' + segments[2]);  // all underscores
-    variations.push(segments[0] + '-' + segments[1] + '_' + segments[2]);  // hyphen then underscore
-    variations.push(segments[0] + '_' + segments[1] + '-' + segments[2]);  // underscore then hyphen
-  }
-  
-  // For efficiency, we don't try all 2^(n-1) combinations for larger n
-  // but these patterns should cover most real-world cases
-  
-  return variations;
+  return decoded;
 }
 
 // Get session storage directory (where claude stores session logs)
@@ -175,11 +175,11 @@ async function generateDisplayName(projectName, actualProjectDir = null) {
   let projectPath = actualProjectDir;
   if (!projectPath) {
     if (projectName.startsWith('-home-claude-projects-')) {
-      projectPath = decodeProjectName(projectName);
+      projectPath = safeDecodeProjectName(projectName);
     } else if (projectName.startsWith('/')) {
       projectPath = projectName;
     } else {
-      projectPath = decodeProjectName(projectName);
+      projectPath = safeDecodeProjectName(projectName);
     }
   }
   
@@ -223,7 +223,7 @@ async function extractProjectDirectory(username, projectName) {
   // e.g., -home-claude-claudecodeui represents /home/claude/claudecodeui
   if (projectName.startsWith('-') && !projectName.startsWith('-home-claude-projects-')) {
     // This is a local directory project, convert back to absolute path
-    const absolutePath = decodeProjectName(projectName);
+    const absolutePath = safeDecodeProjectName(projectName);
     projectDirectoryCache.set(projectName, absolutePath);
     return absolutePath;
   }
@@ -267,10 +267,10 @@ async function extractProjectDirectory(username, projectName) {
       // Check if this is a local directory project first
       if (projectName.startsWith('-') && !projectName.startsWith('-home-claude-projects-')) {
         // Local directory project
-        extractedPath = decodeProjectName(projectName);
+        extractedPath = safeDecodeProjectName(projectName);
       } else if (projectName.startsWith('-home-claude-projects-')) {
         // Remove the leading dash and convert to path
-        extractedPath = decodeProjectName(projectName);
+        extractedPath = safeDecodeProjectName(projectName);
       } else if (projectName.startsWith('/')) {
         extractedPath = projectName;
       } else {
@@ -315,9 +315,9 @@ async function extractProjectDirectory(username, projectName) {
         // No cwd found, fall back to decoded project name
         if (projectName.startsWith('-') && !projectName.startsWith('-home-claude-projects-')) {
           // Local directory project
-          extractedPath = decodeProjectName(projectName);
+          extractedPath = safeDecodeProjectName(projectName);
         } else if (projectName.startsWith('-home-claude-projects-')) {
-          extractedPath = decodeProjectName(projectName);
+          extractedPath = safeDecodeProjectName(projectName);
         } else if (projectName.startsWith('/')) {
           extractedPath = projectName;
         } else {
@@ -348,9 +348,9 @@ async function extractProjectDirectory(username, projectName) {
         if (!extractedPath) {
           if (projectName.startsWith('-') && !projectName.startsWith('-home-claude-projects-')) {
             // Local directory project
-            extractedPath = latestCwd || decodeProjectName(projectName);
+            extractedPath = latestCwd || safeDecodeProjectName(projectName);
           } else if (projectName.startsWith('-home-claude-projects-')) {
-            extractedPath = latestCwd || decodeProjectName(projectName);
+            extractedPath = latestCwd || safeDecodeProjectName(projectName);
           } else if (latestCwd) {
             extractedPath = latestCwd;
           } else {
@@ -495,9 +495,9 @@ async function getProjects(username) {
         } catch (error) {
           // Fall back to decoded project name
           if (projectName.startsWith('-home-claude-projects-')) {
-            actualProjectDir = decodeProjectName(projectName);
+            actualProjectDir = safeDecodeProjectName(projectName);
           } else {
-            actualProjectDir = decodeProjectName(projectName);
+            actualProjectDir = safeDecodeProjectName(projectName);
           }
         }
       }
@@ -924,7 +924,7 @@ async function addProjectManually(username, projectPath, displayName = null) {
   }
   
   // Generate project name (encode path for use as directory name)
-  const projectName = encodeProjectPath(absolutePath);
+  const projectName = encodeProjectPath(absolutePath, username);
   
   // Check if this user already has this project configured
   const config = await loadProjectConfig(username);
@@ -1137,7 +1137,8 @@ export {
   getUserProjectsDir,
   getSessionStorageDir,
   encodeProjectPath,
-  decodeProjectName,
+  safeDecodeProjectName,
+  safeDecodeProjectName as decodeProjectName, // Alias for backward compatibility
   backupProject,
   restoreProject,
   backupAllUserProjects,

@@ -579,7 +579,7 @@ app.post('/api/projects/create-git', authenticateToken, async (req, res) => {
           
           try {
             // Create project ownership
-            const encodedProjectName = encodeProjectPath(targetDir);
+            const encodedProjectName = encodeProjectPath(targetDir, req.user.username);
             
             const existingOwner = await projectDb.getProjectOwner(encodedProjectName);
             if (!existingOwner) {
