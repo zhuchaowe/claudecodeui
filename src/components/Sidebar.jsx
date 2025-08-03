@@ -5,7 +5,7 @@ import { Badge } from './ui/badge';
 import { Input } from './ui/input';
 import ConfirmDialog from './ConfirmDialog';
 
-import { FolderOpen, Folder, Plus, MessageSquare, Clock, ChevronDown, ChevronRight, Edit3, Check, X, Trash2, Settings, FolderPlus, RefreshCw, Sparkles, Edit2, Star, Search, Github } from 'lucide-react';
+import { FolderOpen, Folder, Plus, MessageSquare, Clock, ChevronDown, ChevronRight, Edit3, Check, X, Trash2, Settings, FolderPlus, RefreshCw, Sparkles, Edit2, Star, Search, Github, GitBranch } from 'lucide-react';
 import { cn } from '../lib/utils';
 import ClaudeLogo from './ClaudeLogo';
 import { api } from '../utils/api';
@@ -74,10 +74,13 @@ function Sidebar({
   const [repos, setRepos] = useState([]);
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
-  const [projectCreationMode, setProjectCreationMode] = useState('github'); // 'github', 'git', 'local'
+  const [projectCreationMode, setProjectCreationMode] = useState('github'); // 'github', 'gitea', 'git', 'local'
   const [gitUsername, setGitUsername] = useState('');
   const [gitPassword, setGitPassword] = useState('');
   const [localProjectPath, setLocalProjectPath] = useState('');
+  const [giteaRepos, setGiteaRepos] = useState([]);
+  const [selectedGiteaRepo, setSelectedGiteaRepo] = useState(null);
+  const [loadingGiteaRepos, setLoadingGiteaRepos] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState({});
   const [additionalSessions, setAdditionalSessions] = useState({});
   const [initialSessionsLoaded, setInitialSessionsLoaded] = useState(new Set());
@@ -129,6 +132,23 @@ function Sidebar({
       alert('Failed to load GitHub repositories');
     } finally {
       setLoadingRepos(false);
+    }
+  };
+
+  // Load Gitea repos for cloning
+  const loadGiteaRepos = async () => {
+    setLoadingGiteaRepos(true);
+    try {
+      const response = await api.gitea.repos();
+      if (response.ok) {
+        const data = await response.json();
+        setGiteaRepos(data.repos || []);
+      }
+    } catch (error) {
+      console.error('Error loading Gitea repos:', error);
+      alert('Failed to load Gitea repositories');
+    } finally {
+      setLoadingGiteaRepos(false);
     }
   };
 
@@ -434,6 +454,24 @@ function Sidebar({
           folderName: folderName.trim(),
           useOAuth: true
         });
+      } else if (projectCreationMode === 'gitea') {
+        // Gitea OAuth mode
+        if (!selectedGiteaRepo) {
+          alert('Please select a repository');
+          return;
+        }
+        if (!folderName.trim()) {
+          alert('Please enter folder name');
+          return;
+        }
+        
+        response = await api.createGitProject({
+          gitUrl: selectedGiteaRepo.clone_url,
+          repoFullName: selectedGiteaRepo.full_name,
+          folderName: folderName.trim(),
+          useOAuth: true,
+          provider: 'gitea'
+        });
       } else if (projectCreationMode === 'git') {
         // Git with username/password mode
         if (!gitUrl.trim()) {
@@ -516,6 +554,8 @@ function Sidebar({
     setGitPassword('');
     setLocalProjectPath('');
     setProjectCreationMode('github');
+    setGiteaRepos([]);
+    setSelectedGiteaRepo(null);
   };
 
   const loadMoreSessions = async (project) => {
@@ -679,6 +719,18 @@ function Sidebar({
               <button
                 className={cn(
                   "flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors",
+                  projectCreationMode === 'gitea' 
+                    ? "bg-background text-foreground shadow-sm" 
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+                onClick={() => setProjectCreationMode('gitea')}
+              >
+                <GitBranch className="w-3 h-3 inline-block mr-1" />
+                Gitea
+              </button>
+              <button
+                className={cn(
+                  "flex-1 px-3 py-1.5 text-xs font-medium rounded transition-colors",
                   projectCreationMode === 'git' 
                     ? "bg-background text-foreground shadow-sm" 
                     : "text-muted-foreground hover:text-foreground"
@@ -756,6 +808,62 @@ function Sidebar({
                   />
                 </>
               )}
+
+              {/* Gitea mode */}
+              {projectCreationMode === 'gitea' && (
+                <>
+                  {!giteaRepos.length && !loadingGiteaRepos && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={loadGiteaRepos}
+                      className="w-full h-8 text-xs"
+                    >
+                      Load Repository List
+                    </Button>
+                  )}
+                  
+                  {loadingGiteaRepos && (
+                    <div className="text-center py-4">
+                      <div className="w-6 h-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent mx-auto" />
+                      <p className="text-xs text-muted-foreground mt-2">Loading repositories...</p>
+                    </div>
+                  )}
+                  
+                  {giteaRepos.length > 0 && (
+                    <div className="space-y-2">
+                      <div className="max-h-48 overflow-y-auto border border-border rounded-md">
+                        {giteaRepos.map(repo => (
+                          <div
+                            key={repo.id}
+                            className={cn(
+                              "p-2 hover:bg-accent cursor-pointer text-xs border-b border-border last:border-b-0",
+                              selectedGiteaRepo?.id === repo.id && "bg-accent"
+                            )}
+                            onClick={() => setSelectedGiteaRepo(repo)}
+                          >
+                            <div className="font-medium">{repo.name}</div>
+                            {repo.description && (
+                              <div className="text-muted-foreground truncate">{repo.description}</div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  <Input
+                    value={folderName}
+                    onChange={(e) => setFolderName(e.target.value)}
+                    placeholder="Folder name (project will be saved in this folder)"
+                    className="text-sm focus:ring-2 focus:ring-primary/20"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && selectedGiteaRepo && folderName) createNewProject();
+                      if (e.key === 'Escape') cancelNewProject();
+                    }}
+                  />
+                </>
+              )}
               
               {/* Git with credentials mode */}
               {projectCreationMode === 'git' && (
@@ -818,6 +926,7 @@ function Sidebar({
                   disabled={
                     creatingProject ||
                     (projectCreationMode === 'github' && (!selectedRepo || !folderName.trim())) ||
+                    (projectCreationMode === 'gitea' && (!selectedGiteaRepo || !folderName.trim())) ||
                     (projectCreationMode === 'git' && (!gitUrl.trim() || !gitUsername.trim() || !gitPassword.trim() || !folderName.trim())) ||
                     (projectCreationMode === 'local' && !localProjectPath.trim())
                   }
@@ -825,6 +934,7 @@ function Sidebar({
                 >
                   {creatingProject ? 'Creating...' : 
                     projectCreationMode === 'github' ? 'Clone Repository' :
+                    projectCreationMode === 'gitea' ? 'Clone Repository' :
                     projectCreationMode === 'git' ? 'Clone Repository' :
                     'Add Project'
                   }
@@ -875,6 +985,17 @@ function Sidebar({
                   onClick={() => setProjectCreationMode('github')}
                 >
                   GitHub
+                </button>
+                <button
+                  className={cn(
+                    "flex-1 px-2 py-1.5 text-xs font-medium rounded transition-colors",
+                    projectCreationMode === 'gitea' 
+                      ? "bg-background text-foreground shadow-sm" 
+                      : "text-muted-foreground"
+                  )}
+                  onClick={() => setProjectCreationMode('gitea')}
+                >
+                  Gitea
                 </button>
                 <button
                   className={cn(
@@ -931,6 +1052,55 @@ function Sidebar({
                               selectedRepo?.id === repo.id && "bg-accent"
                             )}
                             onClick={() => setSelectedRepo(repo)}
+                          >
+                            <div className="font-medium">{repo.name}</div>
+                            {repo.description && (
+                              <div className="text-xs text-muted-foreground truncate">{repo.description}</div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    <Input
+                      value={folderName}
+                      onChange={(e) => setFolderName(e.target.value)}
+                      placeholder="Folder name"
+                      className="text-sm h-10 rounded-md focus:border-primary transition-colors"
+                    />
+                  </>
+                )}
+
+                {/* Gitea mode */}
+                {projectCreationMode === 'gitea' && (
+                  <>
+                    {!giteaRepos.length && !loadingGiteaRepos && (
+                      <Button
+                        variant="outline"
+                        onClick={loadGiteaRepos}
+                        className="w-full h-10 text-sm"
+                      >
+                        Load Repository List
+                      </Button>
+                    )}
+                    
+                    {loadingGiteaRepos && (
+                      <div className="text-center py-4">
+                        <div className="w-6 h-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent mx-auto" />
+                        <p className="text-xs text-muted-foreground mt-2">Loading repositories...</p>
+                      </div>
+                    )}
+                    
+                    {giteaRepos.length > 0 && (
+                      <div className="max-h-48 overflow-y-auto border border-border rounded-md">
+                        {giteaRepos.map(repo => (
+                          <div
+                            key={repo.id}
+                            className={cn(
+                              "p-3 active:bg-accent text-sm border-b border-border last:border-b-0",
+                              selectedGiteaRepo?.id === repo.id && "bg-accent"
+                            )}
+                            onClick={() => setSelectedGiteaRepo(repo)}
                           >
                             <div className="font-medium">{repo.name}</div>
                             {repo.description && (
@@ -1010,6 +1180,7 @@ function Sidebar({
                     disabled={
                       creatingProject ||
                       (projectCreationMode === 'github' && (!selectedRepo || !folderName.trim())) ||
+                      (projectCreationMode === 'gitea' && (!selectedGiteaRepo || !folderName.trim())) ||
                       (projectCreationMode === 'git' && (!gitUrl.trim() || !gitUsername.trim() || !gitPassword.trim() || !folderName.trim())) ||
                       (projectCreationMode === 'local' && !localProjectPath.trim())
                     }
@@ -1017,6 +1188,7 @@ function Sidebar({
                   >
                     {creatingProject ? 'Creating...' : 
                       projectCreationMode === 'github' ? 'Clone' :
+                      projectCreationMode === 'gitea' ? 'Clone' :
                       projectCreationMode === 'git' ? 'Clone' :
                       'Add'
                     }

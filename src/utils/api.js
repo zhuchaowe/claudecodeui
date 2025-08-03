@@ -91,5 +91,14 @@ export const api = {
     disconnect: () => authenticatedFetch('/api/github/disconnect', { method: 'POST' }),
     repos: (page = 1, perPage = 30) => 
       authenticatedFetch(`/api/github/repos?page=${page}&per_page=${perPage}`),
+  },
+  
+  // Gitea OAuth endpoints
+  gitea: {
+    getOAuthUrl: () => authenticatedFetch('/api/gitea/oauth/url'),
+    status: () => authenticatedFetch('/api/gitea/status'),
+    disconnect: () => authenticatedFetch('/api/gitea/disconnect', { method: 'POST' }),
+    repos: (page = 1, limit = 30) => 
+      authenticatedFetch(`/api/gitea/repos?page=${page}&limit=${limit}`),
   }
 };
