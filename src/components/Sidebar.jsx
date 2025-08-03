@@ -83,6 +83,12 @@ function Sidebar({
   const [loadingGiteaRepos, setLoadingGiteaRepos] = useState(false);
   const [githubConfigured, setGithubConfigured] = useState(false);
   const [giteaConfigured, setGiteaConfigured] = useState(false);
+  const [githubRepoSearch, setGithubRepoSearch] = useState('');
+  const [giteaRepoSearch, setGiteaRepoSearch] = useState('');
+  const [githubPage, setGithubPage] = useState(1);
+  const [giteaPage, setGiteaPage] = useState(1);
+  const [hasMoreGithubRepos, setHasMoreGithubRepos] = useState(true);
+  const [hasMoreGiteaRepos, setHasMoreGiteaRepos] = useState(true);
   const [loadingSessions, setLoadingSessions] = useState({});
   const [additionalSessions, setAdditionalSessions] = useState({});
   const [initialSessionsLoaded, setInitialSessionsLoaded] = useState(new Set());
@@ -121,13 +127,19 @@ function Sidebar({
   };
 
   // Load GitHub repos for cloning
-  const loadGithubRepos = async () => {
+  const loadGithubRepos = async (page = 1, append = false) => {
     setLoadingRepos(true);
     try {
-      const response = await api.github.repos();
+      const response = await api.github.repos(page, 30);
       if (response.ok) {
         const data = await response.json();
-        setRepos(data.repos);
+        if (append) {
+          setRepos(prev => [...prev, ...data.repos]);
+        } else {
+          setRepos(data.repos);
+        }
+        setHasMoreGithubRepos(data.repos.length === 30);
+        setGithubPage(page);
       }
     } catch (error) {
       console.error('Error loading repos:', error);
@@ -138,13 +150,19 @@ function Sidebar({
   };
 
   // Load Gitea repos for cloning
-  const loadGiteaRepos = async () => {
+  const loadGiteaRepos = async (page = 1, append = false) => {
     setLoadingGiteaRepos(true);
     try {
-      const response = await api.gitea.repos();
+      const response = await api.gitea.repos(page, 30);
       if (response.ok) {
         const data = await response.json();
-        setGiteaRepos(data.repos || []);
+        if (append) {
+          setGiteaRepos(prev => [...prev, ...(data.repos || [])]);
+        } else {
+          setGiteaRepos(data.repos || []);
+        }
+        setHasMoreGiteaRepos((data.repos || []).length === 30);
+        setGiteaPage(page);
       }
     } catch (error) {
       console.error('Error loading Gitea repos:', error);
@@ -609,6 +627,12 @@ function Sidebar({
     }
     setGiteaRepos([]);
     setSelectedGiteaRepo(null);
+    setGithubRepoSearch('');
+    setGiteaRepoSearch('');
+    setGithubPage(1);
+    setGiteaPage(1);
+    setHasMoreGithubRepos(true);
+    setHasMoreGiteaRepos(true);
   };
 
   const loadMoreSessions = async (project) => {
@@ -817,39 +841,61 @@ function Sidebar({
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={loadGithubRepos}
+                      onClick={() => loadGithubRepos(1)}
                       className="w-full h-8 text-xs"
                     >
                       Load Repository List
                     </Button>
                   )}
                   
-                  {loadingRepos && (
-                    <div className="text-center py-4">
-                      <div className="w-6 h-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent mx-auto" />
-                      <p className="text-xs text-muted-foreground mt-2">Loading repositories...</p>
+                  {repos.length > 0 && (
+                    <div className="space-y-2">
+                      <Input
+                        value={githubRepoSearch}
+                        onChange={(e) => setGithubRepoSearch(e.target.value)}
+                        placeholder="Search repositories..."
+                        className="h-8 text-xs"
+                      />
+                      <div className="max-h-48 overflow-y-auto border border-border rounded-md">
+                        {repos
+                          .filter(repo => 
+                            githubRepoSearch === '' || 
+                            repo.name.toLowerCase().includes(githubRepoSearch.toLowerCase()) ||
+                            (repo.description && repo.description.toLowerCase().includes(githubRepoSearch.toLowerCase()))
+                          )
+                          .map(repo => (
+                            <div
+                              key={repo.id}
+                              className={cn(
+                                "p-2 hover:bg-accent cursor-pointer text-xs border-b border-border last:border-b-0",
+                                selectedRepo?.id === repo.id && "bg-accent"
+                              )}
+                              onClick={() => setSelectedRepo(repo)}
+                            >
+                              <div className="font-medium">{repo.name}</div>
+                              {repo.description && (
+                                <div className="text-muted-foreground truncate">{repo.description}</div>
+                              )}
+                            </div>
+                          ))}
+                      </div>
+                      {hasMoreGithubRepos && !loadingRepos && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => loadGithubRepos(githubPage + 1, true)}
+                          className="w-full h-7 text-xs"
+                        >
+                          Load More
+                        </Button>
+                      )}
                     </div>
                   )}
                   
-                  {repos.length > 0 && (
-                    <div className="space-y-2">
-                      <div className="max-h-48 overflow-y-auto border border-border rounded-md">
-                        {repos.map(repo => (
-                          <div
-                            key={repo.id}
-                            className={cn(
-                              "p-2 hover:bg-accent cursor-pointer text-xs border-b border-border last:border-b-0",
-                              selectedRepo?.id === repo.id && "bg-accent"
-                            )}
-                            onClick={() => setSelectedRepo(repo)}
-                          >
-                            <div className="font-medium">{repo.name}</div>
-                            {repo.description && (
-                              <div className="text-muted-foreground truncate">{repo.description}</div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
+                  {loadingRepos && repos.length === 0 && (
+                    <div className="text-center py-4">
+                      <div className="w-6 h-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent mx-auto" />
+                      <p className="text-xs text-muted-foreground mt-2">Loading repositories...</p>
                     </div>
                   )}
                   
@@ -873,39 +919,61 @@ function Sidebar({
                     <Button
                       size="sm"
                       variant="outline"
-                      onClick={loadGiteaRepos}
+                      onClick={() => loadGiteaRepos(1)}
                       className="w-full h-8 text-xs"
                     >
                       Load Repository List
                     </Button>
                   )}
                   
-                  {loadingGiteaRepos && (
-                    <div className="text-center py-4">
-                      <div className="w-6 h-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent mx-auto" />
-                      <p className="text-xs text-muted-foreground mt-2">Loading repositories...</p>
+                  {giteaRepos.length > 0 && (
+                    <div className="space-y-2">
+                      <Input
+                        value={giteaRepoSearch}
+                        onChange={(e) => setGiteaRepoSearch(e.target.value)}
+                        placeholder="Search repositories..."
+                        className="h-8 text-xs"
+                      />
+                      <div className="max-h-48 overflow-y-auto border border-border rounded-md">
+                        {giteaRepos
+                          .filter(repo => 
+                            giteaRepoSearch === '' || 
+                            repo.name.toLowerCase().includes(giteaRepoSearch.toLowerCase()) ||
+                            (repo.description && repo.description.toLowerCase().includes(giteaRepoSearch.toLowerCase()))
+                          )
+                          .map(repo => (
+                            <div
+                              key={repo.id}
+                              className={cn(
+                                "p-2 hover:bg-accent cursor-pointer text-xs border-b border-border last:border-b-0",
+                                selectedGiteaRepo?.id === repo.id && "bg-accent"
+                              )}
+                              onClick={() => setSelectedGiteaRepo(repo)}
+                            >
+                              <div className="font-medium">{repo.name}</div>
+                              {repo.description && (
+                                <div className="text-muted-foreground truncate">{repo.description}</div>
+                              )}
+                            </div>
+                          ))}
+                      </div>
+                      {hasMoreGiteaRepos && !loadingGiteaRepos && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => loadGiteaRepos(giteaPage + 1, true)}
+                          className="w-full h-7 text-xs"
+                        >
+                          Load More
+                        </Button>
+                      )}
                     </div>
                   )}
                   
-                  {giteaRepos.length > 0 && (
-                    <div className="space-y-2">
-                      <div className="max-h-48 overflow-y-auto border border-border rounded-md">
-                        {giteaRepos.map(repo => (
-                          <div
-                            key={repo.id}
-                            className={cn(
-                              "p-2 hover:bg-accent cursor-pointer text-xs border-b border-border last:border-b-0",
-                              selectedGiteaRepo?.id === repo.id && "bg-accent"
-                            )}
-                            onClick={() => setSelectedGiteaRepo(repo)}
-                          >
-                            <div className="font-medium">{repo.name}</div>
-                            {repo.description && (
-                              <div className="text-muted-foreground truncate">{repo.description}</div>
-                            )}
-                          </div>
-                        ))}
-                      </div>
+                  {loadingGiteaRepos && giteaRepos.length === 0 && (
+                    <div className="text-center py-4">
+                      <div className="w-6 h-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent mx-auto" />
+                      <p className="text-xs text-muted-foreground mt-2">Loading repositories...</p>
                     </div>
                   )}
                   
@@ -1089,37 +1157,60 @@ function Sidebar({
                     {!repos.length && !loadingRepos && (
                       <Button
                         variant="outline"
-                        onClick={loadGithubRepos}
+                        onClick={() => loadGithubRepos(1)}
                         className="w-full h-10 text-sm"
                       >
                         Load Repository List
                       </Button>
                     )}
                     
-                    {loadingRepos && (
-                      <div className="text-center py-4">
-                        <div className="w-6 h-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent mx-auto" />
-                        <p className="text-xs text-muted-foreground mt-2">Loading repositories...</p>
+                    {repos.length > 0 && (
+                      <div className="space-y-2">
+                        <Input
+                          value={githubRepoSearch}
+                          onChange={(e) => setGithubRepoSearch(e.target.value)}
+                          placeholder="Search repositories..."
+                          className="h-9 text-sm"
+                        />
+                        <div className="max-h-48 overflow-y-auto border border-border rounded-md">
+                          {repos
+                            .filter(repo => 
+                              githubRepoSearch === '' || 
+                              repo.name.toLowerCase().includes(githubRepoSearch.toLowerCase()) ||
+                              (repo.description && repo.description.toLowerCase().includes(githubRepoSearch.toLowerCase()))
+                            )
+                            .map(repo => (
+                              <div
+                                key={repo.id}
+                                className={cn(
+                                  "p-3 active:bg-accent text-sm border-b border-border last:border-b-0",
+                                  selectedRepo?.id === repo.id && "bg-accent"
+                                )}
+                                onClick={() => setSelectedRepo(repo)}
+                              >
+                                <div className="font-medium">{repo.name}</div>
+                                {repo.description && (
+                                  <div className="text-xs text-muted-foreground truncate">{repo.description}</div>
+                                )}
+                              </div>
+                            ))}
+                        </div>
+                        {hasMoreGithubRepos && !loadingRepos && (
+                          <Button
+                            variant="outline"
+                            onClick={() => loadGithubRepos(githubPage + 1, true)}
+                            className="w-full h-9 text-sm"
+                          >
+                            Load More
+                          </Button>
+                        )}
                       </div>
                     )}
                     
-                    {repos.length > 0 && (
-                      <div className="max-h-48 overflow-y-auto border border-border rounded-md">
-                        {repos.map(repo => (
-                          <div
-                            key={repo.id}
-                            className={cn(
-                              "p-3 active:bg-accent text-sm border-b border-border last:border-b-0",
-                              selectedRepo?.id === repo.id && "bg-accent"
-                            )}
-                            onClick={() => setSelectedRepo(repo)}
-                          >
-                            <div className="font-medium">{repo.name}</div>
-                            {repo.description && (
-                              <div className="text-xs text-muted-foreground truncate">{repo.description}</div>
-                            )}
-                          </div>
-                        ))}
+                    {loadingRepos && repos.length === 0 && (
+                      <div className="text-center py-4">
+                        <div className="w-6 h-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent mx-auto" />
+                        <p className="text-xs text-muted-foreground mt-2">Loading repositories...</p>
                       </div>
                     )}
                     
@@ -1138,37 +1229,60 @@ function Sidebar({
                     {!giteaRepos.length && !loadingGiteaRepos && (
                       <Button
                         variant="outline"
-                        onClick={loadGiteaRepos}
+                        onClick={() => loadGiteaRepos(1)}
                         className="w-full h-10 text-sm"
                       >
                         Load Repository List
                       </Button>
                     )}
                     
-                    {loadingGiteaRepos && (
-                      <div className="text-center py-4">
-                        <div className="w-6 h-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent mx-auto" />
-                        <p className="text-xs text-muted-foreground mt-2">Loading repositories...</p>
+                    {giteaRepos.length > 0 && (
+                      <div className="space-y-2">
+                        <Input
+                          value={giteaRepoSearch}
+                          onChange={(e) => setGiteaRepoSearch(e.target.value)}
+                          placeholder="Search repositories..."
+                          className="h-9 text-sm"
+                        />
+                        <div className="max-h-48 overflow-y-auto border border-border rounded-md">
+                          {giteaRepos
+                            .filter(repo => 
+                              giteaRepoSearch === '' || 
+                              repo.name.toLowerCase().includes(giteaRepoSearch.toLowerCase()) ||
+                              (repo.description && repo.description.toLowerCase().includes(giteaRepoSearch.toLowerCase()))
+                            )
+                            .map(repo => (
+                              <div
+                                key={repo.id}
+                                className={cn(
+                                  "p-3 active:bg-accent text-sm border-b border-border last:border-b-0",
+                                  selectedGiteaRepo?.id === repo.id && "bg-accent"
+                                )}
+                                onClick={() => setSelectedGiteaRepo(repo)}
+                              >
+                                <div className="font-medium">{repo.name}</div>
+                                {repo.description && (
+                                  <div className="text-xs text-muted-foreground truncate">{repo.description}</div>
+                                )}
+                              </div>
+                            ))}
+                        </div>
+                        {hasMoreGiteaRepos && !loadingGiteaRepos && (
+                          <Button
+                            variant="outline"
+                            onClick={() => loadGiteaRepos(giteaPage + 1, true)}
+                            className="w-full h-9 text-sm"
+                          >
+                            Load More
+                          </Button>
+                        )}
                       </div>
                     )}
                     
-                    {giteaRepos.length > 0 && (
-                      <div className="max-h-48 overflow-y-auto border border-border rounded-md">
-                        {giteaRepos.map(repo => (
-                          <div
-                            key={repo.id}
-                            className={cn(
-                              "p-3 active:bg-accent text-sm border-b border-border last:border-b-0",
-                              selectedGiteaRepo?.id === repo.id && "bg-accent"
-                            )}
-                            onClick={() => setSelectedGiteaRepo(repo)}
-                          >
-                            <div className="font-medium">{repo.name}</div>
-                            {repo.description && (
-                              <div className="text-xs text-muted-foreground truncate">{repo.description}</div>
-                            )}
-                          </div>
-                        ))}
+                    {loadingGiteaRepos && giteaRepos.length === 0 && (
+                      <div className="text-center py-4">
+                        <div className="w-6 h-6 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent mx-auto" />
+                        <p className="text-xs text-muted-foreground mt-2">Loading repositories...</p>
                       </div>
                     )}
                     
