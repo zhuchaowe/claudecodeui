@@ -22,8 +22,12 @@ function encodeProjectPath(path, username = null) {
   let encoded = path.replace(/[^a-zA-Z0-9]/g, '-');
   // Remove multiple consecutive hyphens
   encoded = encoded.replace(/-+/g, '-');
-  // Remove leading/trailing hyphens
-  encoded = encoded.replace(/^-+|-+$/g, '');
+  // Remove trailing hyphens only (keep leading hyphen for session directory)
+  encoded = encoded.replace(/-+$/g, '');
+  // Ensure it starts with a hyphen for session directory
+  if (!encoded.startsWith('-')) {
+    encoded = '-' + encoded;
+  }
   
   // Save mapping to database if username provided
   if (username) {
@@ -219,6 +223,18 @@ async function extractProjectDirectory(username, projectName) {
     return projectDirectoryCache.get(projectName);
   }
   
+  // First try to get from database
+  try {
+    const originalPath = pathMappingDb.getOriginalPath(projectName);
+    if (originalPath) {
+      projectDirectoryCache.set(projectName, originalPath);
+      return originalPath;
+    }
+  } catch (err) {
+    console.error('Error getting path from database:', err);
+  }
+  
+  // Fallback to legacy logic for old projects
   // Check if this is a local directory project (starts with dash and represents an absolute path)
   // e.g., -home-claude-claudecodeui represents /home/claude/claudecodeui
   if (projectName.startsWith('-') && !projectName.startsWith('-home-claude-projects-')) {
@@ -232,7 +248,15 @@ async function extractProjectDirectory(username, projectName) {
   // we need to extract just the project folder name
   let projectFolderName = projectName;
   if (projectName.startsWith('-home-claude-projects-')) {
-    // Extract just the project name part (e.g., 'felo-mygpt' from '-home-claude-projects-zhuchao-felo-mygpt')
+    // For new simple encoding, the project might just be the folder name
+    // Try to decode from database first
+    const decoded = safeDecodeProjectName(projectName);
+    if (decoded && decoded.includes(username)) {
+      projectDirectoryCache.set(projectName, decoded);
+      return decoded;
+    }
+    
+    // Fallback: Extract just the project name part
     const parts = projectName.split('-');
     // Skip: '', 'home', 'claude', 'projects', 'username'
     const usernameIndex = parts.indexOf(username);
