@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { promises as fs } from 'fs';
+import { promises as fs, existsSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { projectDb } from './database/db.js';
@@ -255,11 +255,21 @@ async function spawnClaude(command, options = {}, ws) {
     console.log('🔍 Full command args:', JSON.stringify(args, null, 2));
     console.log('🔍 Final CLI command will be: ' + cliCommand + ' ' + args.join(' '));
     
-    const claudeProcess = spawn(cliCommand, args, {
-      cwd: workingDir,
+    // Ensure working directory exists before spawning
+    const spawnOptions = {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env } // Inherit all environment variables
-    });
+    };
+    
+    // Check if working directory exists
+    if (workingDir && existsSync(workingDir)) {
+      spawnOptions.cwd = workingDir;
+    } else {
+      console.warn(`Working directory ${workingDir} does not exist, using /app as fallback`);
+      spawnOptions.cwd = '/app'; // Use a safe default that exists in Docker
+    }
+    
+    const claudeProcess = spawn(cliCommand, args, spawnOptions);
     
     // Attach temp file info to process for cleanup later
     claudeProcess.tempImagePaths = tempImagePaths;

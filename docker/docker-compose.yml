@@ -1,0 +1,99 @@
+version: '3.8'
+
+services:
+  claude-code-ui:
+    build: 
+      context: ..
+      dockerfile: docker/dockerfile
+    container_name: claude-code-ui
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3009}:3009"
+    environment:
+      # Server Configuration
+      - PORT=${PORT:-3009}
+      - VITE_PORT=${VITE_PORT:-8080}
+      
+      # GitHub OAuth Configuration
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - GITHUB_REDIRECT_URI=${GITHUB_REDIRECT_URI}
+      - GITHUB_ALLOWED_ORGS=${GITHUB_ALLOWED_ORGS}
+      - GITHUB_REQUIRED_STAR_REPO=${GITHUB_REQUIRED_STAR_REPO}
+      - FRONTEND_URL=${FRONTEND_URL}
+      
+      # Gitea OAuth Configuration
+      - GITEA_INSTANCE_URL=${GITEA_INSTANCE_URL}
+      - GITEA_CLIENT_ID=${GITEA_CLIENT_ID}
+      - GITEA_CLIENT_SECRET=${GITEA_CLIENT_SECRET}
+      - GITEA_REDIRECT_URI=${GITEA_REDIRECT_URI}
+      
+      # Email Configuration
+      - SMTP_HOST=${SMTP_HOST}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_SECURE=${SMTP_SECURE:-false}
+      - SMTP_USER=${SMTP_USER}
+      - SMTP_PASS=${SMTP_PASS}
+      - SMTP_FROM=${SMTP_FROM}
+      
+      # Directory Configuration
+      - PROJECTS_DIR=/app/data/projects
+      - BACKUP_DIR=/app/data/backup
+      
+      # CLI Configuration
+      - CLAUDE_CLI_COMMAND=${CLAUDE_CLI_COMMAND:-/usr/local/bin/claude}
+      - ANTHROPIC_AUTH_TOKEN=${ANTHROPIC_AUTH_TOKEN}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL}
+      
+      # Claude-code-proxy Configuration (Optional)
+      # Set OPENAI_API_KEY to enable proxy mode
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL}
+      - BIG_MODEL=${BIG_MODEL}
+      - SMALL_MODEL=${SMALL_MODEL}
+      
+      # WebSocket Configuration
+      - FORCE_WSS=${FORCE_WSS:-false}
+    volumes:
+      # Project files storage (using named volumes for better permission handling)
+      - claude-projects:/app/data/projects
+      
+      # Backup storage
+      - claude-backup:/app/data/backup
+      
+      # Database storage
+      - claude-database:/app/server/database
+      
+      # Logs storage
+      - claude-logs:/app/logs
+      
+      # Optional: Mount .env file if you want to update it without rebuilding
+      - ${ENV_FILE:-../.env}:/app/.env:ro
+      
+      # Optional: Mount SSH keys for git operations
+      - ${SSH_DIR:-~/.ssh}:/root/.ssh:ro
+      
+      # Optional: Mount git config
+      - ${GIT_CONFIG:-~/.gitconfig}:/root/.gitconfig:ro
+    networks:
+      - claude-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3008/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  claude-network:
+    driver: bridge
+
+volumes:
+  claude-projects:
+    driver: local
+  claude-backup:
+    driver: local
+  claude-database:
+    driver: local
+  claude-logs:
+    driver: local

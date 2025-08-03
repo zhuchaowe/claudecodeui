@@ -1,0 +1,42 @@
+# Dependencies
+node_modules
+npm-debug.log*
+
+# Development files
+.env.local
+.env.development
+*.log
+
+# Git
+.git
+.gitignore
+
+# Documentation
+README*.md
+*.md
+docs/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+coverage/
+*.test.js
+
+# Build artifacts (will be rebuilt in container)
+dist/
+
+# Backup files
+*.backup.*
+
+# Temporary files
+nohup.out
+server.log
+logs/

@@ -1,0 +1,86 @@
+FROM node:20-alpine
+
+# Install required system packages
+RUN apk add --no-cache \
+    git \
+    python3 \
+    make \
+    g++ \
+    sqlite \
+    bash \
+    ca-certificates
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files first for better caching
+COPY package*.json ./
+
+# Install all dependencies (including dev dependencies for build)
+RUN npm ci
+
+# Install Claude Code globally
+RUN npm install -g @anthropic-ai/claude-code
+
+# Install Python dependencies for claude-code-proxy
+RUN apk add --no-cache python3-dev py3-pip
+
+# Clone and setup claude-code-proxy
+RUN git clone https://github.com/fuergaosi233/claude-code-proxy /opt/claude-code-proxy && \
+    cd /opt/claude-code-proxy && \
+    pip3 install --no-cache-dir -r requirements.txt --break-system-packages && \
+    cp .env.example .env
+
+# Copy the entire project
+COPY . .
+
+# Build the frontend
+RUN npm run build
+
+# Create necessary directories
+RUN mkdir -p /app/data/projects \
+    /app/data/backup \
+    /app/logs \
+    /app/server/database
+
+# Copy database schema files to both locations (for when volume is mounted)
+RUN mkdir -p /app/database-schema
+COPY server/database/*.sql /app/database-schema/
+COPY server/database/db.js /app/database-schema/
+
+# Set proper permissions
+RUN chmod +x /app/docker/docker-entrypoint.sh
+
+# Expose the port
+EXPOSE 3009
+
+# Copy entrypoint script
+COPY docker/docker-entrypoint.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+# Copy claude wrapper script
+COPY docker/claude-wrapper.sh /usr/local/bin/claude-wrapper
+RUN chmod +x /usr/local/bin/claude-wrapper
+
+# Create necessary directories with proper permissions
+RUN mkdir -p /home/node/.claude && \
+    mkdir -p /app/data/projects && \
+    mkdir -p /app/data/backup && \
+    mkdir -p /app/server/database && \
+    mkdir -p /app/logs && \
+    chown -R node:node /app && \
+    chown -R node:node /home/node && \
+    chown -R node:node /usr/local/lib/node_modules/@anthropic-ai/claude-code && \
+    chown -R node:node /opt/claude-code-proxy && \
+    chmod -R 755 /app/data && \
+    chmod -R 755 /app/server/database
+
+# Switch to non-root user
+USER node
+
+# Set working directory
+WORKDIR /app
+
+# Set the entrypoint
+ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+CMD ["npm", "run", "server"]
