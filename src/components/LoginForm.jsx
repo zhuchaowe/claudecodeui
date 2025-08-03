@@ -8,6 +8,7 @@ const LoginForm = () => {
   const [allowedOrgs, setAllowedOrgs] = useState(null);
   const [starRequirement, setStarRequirement] = useState(null);
   const [giteaConfigured, setGiteaConfigured] = useState(false);
+  const [githubConfigured, setGithubConfigured] = useState(false);
   
   const { login } = useAuth();
 
@@ -69,21 +70,29 @@ const LoginForm = () => {
       }
     };
     
-    const fetchGiteaConfig = async () => {
+    const fetchAuthConfig = async () => {
       try {
-        const response = await fetch('/api/gitea/config-status');
-        if (response.ok) {
-          const data = await response.json();
-          setGiteaConfigured(data.isConfigured);
+        // Check GitHub configuration
+        const githubResponse = await fetch('/api/github/config-status');
+        if (githubResponse.ok) {
+          const githubData = await githubResponse.json();
+          setGithubConfigured(githubData.isConfigured);
+        }
+        
+        // Check Gitea configuration
+        const giteaResponse = await fetch('/api/gitea/config-status');
+        if (giteaResponse.ok) {
+          const giteaData = await giteaResponse.json();
+          setGiteaConfigured(giteaData.isConfigured);
         }
       } catch (error) {
-        console.error('Failed to fetch Gitea configuration:', error);
+        console.error('Failed to fetch auth configuration:', error);
       }
     };
 
     fetchAllowedOrgs();
     fetchStarRequirement();
-    fetchGiteaConfig();
+    fetchAuthConfig();
   }, []);
 
   const handleGithubLogin = async () => {
@@ -182,20 +191,22 @@ const LoginForm = () => {
             </div>
           )}
 
-          {/* Login Buttons */}
+          {/* Login Buttons - Show only configured provider */}
           <div className="space-y-3">
-            {/* GitHub Login Button */}
-            <button
-              onClick={handleGithubLogin}
-              disabled={isLoading}
-              className="w-full bg-gray-900 hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700 disabled:bg-gray-600 text-white font-medium py-3 px-4 rounded-md transition-colors duration-200 flex items-center justify-center gap-3"
-            >
-              <Github className="w-5 h-5" />
-              {isLoading ? 'Redirecting to GitHub...' : 'Continue with GitHub'}
-            </button>
+            {/* GitHub Login Button - Only show if GitHub is configured */}
+            {githubConfigured && !giteaConfigured && (
+              <button
+                onClick={handleGithubLogin}
+                disabled={isLoading}
+                className="w-full bg-gray-900 hover:bg-gray-800 dark:bg-gray-800 dark:hover:bg-gray-700 disabled:bg-gray-600 text-white font-medium py-3 px-4 rounded-md transition-colors duration-200 flex items-center justify-center gap-3"
+              >
+                <Github className="w-5 h-5" />
+                {isLoading ? 'Redirecting to GitHub...' : 'Continue with GitHub'}
+              </button>
+            )}
 
-            {/* Gitea Login Button - Only show if configured */}
-            {giteaConfigured && (
+            {/* Gitea Login Button - Only show if Gitea is configured */}
+            {giteaConfigured && !githubConfigured && (
               <button
                 onClick={handleGiteaLogin}
                 disabled={isLoading}
@@ -204,6 +215,27 @@ const LoginForm = () => {
                 <GitBranch className="w-5 h-5" />
                 {isLoading ? 'Redirecting to Gitea...' : 'Continue with Gitea'}
               </button>
+            )}
+
+            {/* If both are configured, prefer Gitea */}
+            {githubConfigured && giteaConfigured && (
+              <button
+                onClick={handleGiteaLogin}
+                disabled={isLoading}
+                className="w-full bg-green-700 hover:bg-green-600 dark:bg-green-800 dark:hover:bg-green-700 disabled:bg-gray-600 text-white font-medium py-3 px-4 rounded-md transition-colors duration-200 flex items-center justify-center gap-3"
+              >
+                <GitBranch className="w-5 h-5" />
+                {isLoading ? 'Redirecting to Gitea...' : 'Continue with Gitea'}
+              </button>
+            )}
+
+            {/* If neither is configured, show error message */}
+            {!githubConfigured && !giteaConfigured && (
+              <div className="text-center p-4 bg-yellow-100 dark:bg-yellow-900/20 border border-yellow-300 dark:border-yellow-800 rounded-md">
+                <p className="text-sm text-yellow-700 dark:text-yellow-400">
+                  No authentication provider is configured. Please configure either GitHub or Gitea in your .env file.
+                </p>
+              </div>
             )}
           </div>
 

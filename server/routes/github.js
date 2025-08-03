@@ -18,6 +18,15 @@ const getGithubConfig = () => ({
 // Store state temporarily (in production, use Redis or similar)
 const oauthStates = new Map();
 
+// Check GitHub configuration status
+router.get('/config-status', (req, res) => {
+  const { GITHUB_CLIENT_ID } = getGithubConfig();
+  res.json({
+    isConfigured: !!(GITHUB_CLIENT_ID),
+    provider: 'github'
+  });
+});
+
 // Check if user belongs to allowed organizations
 const checkUserOrganization = async (accessToken, allowedOrgs) => {
   if (!allowedOrgs || allowedOrgs.length === 0) {

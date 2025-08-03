@@ -862,41 +862,45 @@ async function deleteProject(username, projectName) {
   const sessionDir = path.join(getSessionStorageDir(), projectName);
   
   try {
-    // Remove the session directory (in ~/.claude/projects)
-    await fs.rm(sessionDir, { recursive: true, force: true });
-    
-    // Also try to remove the actual project directory if it exists
     // Extract the actual project directory path
     const actualProjectDir = await extractProjectDirectory(username, projectName);
-    if (actualProjectDir && actualProjectDir !== sessionDir) {
+    const userProjectsDir = getUserProjectsDir(username);
+    const isInUserProjectsDir = actualProjectDir && actualProjectDir.startsWith(userProjectsDir);
+    
+    // Only delete session and backup directories if the project is in user's projects directory
+    if (isInUserProjectsDir) {
+      // Remove the session directory (in ~/.claude/projects)
+      await fs.rm(sessionDir, { recursive: true, force: true });
+      
+      // Delete backup for this project
+      const backupDir = path.join(getBackupDir(username), projectName);
       try {
-        // Only delete if it's under the user's projects directory
-        const userProjectsDir = getUserProjectsDir(username);
-        if (actualProjectDir.startsWith(userProjectsDir)) {
-          await fs.rm(actualProjectDir, { recursive: true, force: true });
-        }
+        await fs.rm(backupDir, { recursive: true, force: true });
+        console.log(`[Delete] Removed backup for project ${projectName}`);
       } catch (err) {
-        // It's okay if we can't delete the actual project directory
-        console.warn(`Could not delete actual project directory ${actualProjectDir}:`, err.message);
+        console.warn(`[Delete] Could not delete backup directory ${backupDir}:`, err.message);
       }
+      
+      // Also try to remove the actual project directory if it exists
+      if (actualProjectDir && actualProjectDir !== sessionDir) {
+        try {
+          await fs.rm(actualProjectDir, { recursive: true, force: true });
+        } catch (err) {
+          // It's okay if we can't delete the actual project directory
+          console.warn(`Could not delete actual project directory ${actualProjectDir}:`, err.message);
+        }
+      }
+    } else {
+      console.log(`[Delete] Project ${projectName} is outside user directory, only removing database records`);
     }
     
-    // Remove from project ownership database
+    // Always remove from project ownership database
     await projectDb.deleteProjectOwnership(projectName);
     
-    // Remove from project config
+    // Always remove from project config
     const config = await loadProjectConfig(username);
     delete config[projectName];
     await saveProjectConfig(username, config);
-    
-    // Delete backup for this project
-    const backupDir = path.join(getBackupDir(username), projectName);
-    try {
-      await fs.rm(backupDir, { recursive: true, force: true });
-      console.log(`[Delete] Removed backup for project ${projectName}`);
-    } catch (err) {
-      console.warn(`[Delete] Could not delete backup directory ${backupDir}:`, err.message);
-    }
     
     return true;
   } catch (error) {
