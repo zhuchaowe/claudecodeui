@@ -10,7 +10,7 @@ NC='\033[0m' # No Color
 # Set default environment variables
 export PROJECTS_DIR=${PROJECTS_DIR:-/app/data/projects}
 export BACKUP_DIR=${BACKUP_DIR:-/app/data/backup}
-export PORT=${UI_PORT:-3009}
+export UI_PORT=${UI_PORT:-3009}
 
 # Create necessary directories if they don't exist
 mkdir -p "$PROJECTS_DIR" "$BACKUP_DIR" /app/logs /app/server/database
@@ -93,12 +93,12 @@ if is_server_mode "$@"; then
     echo ""
     echo -e "${BLUE}Server will be available at:${NC}"
     echo -e "${BLUE}服务器将在以下地址可用：${NC}"
-    echo -e "${YELLOW}http://localhost:${PORT}${NC}"
+    echo -e "${YELLOW}http://localhost:${UI_PORT}${NC}"
     echo ""
     echo -e "${BLUE}Environment:${NC}"
     echo -e "${BLUE}- Projects Directory: ${PROJECTS_DIR}${NC}"
     echo -e "${BLUE}- Backup Directory: ${BACKUP_DIR}${NC}"
-    echo -e "${BLUE}- Port: ${PORT}${NC}"
+    echo -e "${BLUE}- Port: ${UI_PORT}${NC}"
     echo ""
     
     # Change to app directory and start server

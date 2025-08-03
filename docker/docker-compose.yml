@@ -11,7 +11,7 @@ services:
       - "${UI_PORT:-3009}:3009"
     environment:
       # Server Configuration
-      - PORT=${UI_PORT:-3009}
+      - UI_PORT=${UI_PORT:-3009}
       - VITE_PORT=${VITE_PORT:-8080}
       
       # GitHub OAuth Configuration
