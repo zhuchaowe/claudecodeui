@@ -867,31 +867,34 @@ async function deleteProject(username, projectName) {
     const userProjectsDir = getUserProjectsDir(username);
     const isInUserProjectsDir = actualProjectDir && actualProjectDir.startsWith(userProjectsDir);
     
-    // Only delete session and backup directories if the project is in user's projects directory
+    // Always remove the session directory (in ~/.claude/projects)
+    // This ensures the project won't reappear after refresh
+    await fs.rm(sessionDir, { recursive: true, force: true });
+    console.log(`[Delete] Removed session directory for project ${projectName}`);
+    
+    // Always delete backup for this project
+    const backupDir = path.join(getBackupDir(username), projectName);
+    try {
+      await fs.rm(backupDir, { recursive: true, force: true });
+      console.log(`[Delete] Removed backup for project ${projectName}`);
+    } catch (err) {
+      console.warn(`[Delete] Could not delete backup directory ${backupDir}:`, err.message);
+    }
+    
+    // Only delete actual project directory if the project is in user's projects directory
     if (isInUserProjectsDir) {
-      // Remove the session directory (in ~/.claude/projects)
-      await fs.rm(sessionDir, { recursive: true, force: true });
-      
-      // Delete backup for this project
-      const backupDir = path.join(getBackupDir(username), projectName);
-      try {
-        await fs.rm(backupDir, { recursive: true, force: true });
-        console.log(`[Delete] Removed backup for project ${projectName}`);
-      } catch (err) {
-        console.warn(`[Delete] Could not delete backup directory ${backupDir}:`, err.message);
-      }
-      
       // Also try to remove the actual project directory if it exists
       if (actualProjectDir && actualProjectDir !== sessionDir) {
         try {
           await fs.rm(actualProjectDir, { recursive: true, force: true });
+          console.log(`[Delete] Removed actual project directory ${actualProjectDir}`);
         } catch (err) {
           // It's okay if we can't delete the actual project directory
           console.warn(`Could not delete actual project directory ${actualProjectDir}:`, err.message);
         }
       }
     } else {
-      console.log(`[Delete] Project ${projectName} is outside user directory, only removing database records`);
+      console.log(`[Delete] Project ${projectName} is outside user directory, skipping actual project directory deletion`);
     }
     
     // Always remove from project ownership database
