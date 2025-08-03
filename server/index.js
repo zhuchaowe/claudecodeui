@@ -458,81 +458,261 @@ app.post('/api/projects/create-git', authenticateToken, async (req, res) => {
     
     console.log(`Cloning git repository to ${targetDir}...`);
     
-    // Use spawn to run git clone
-    const { execSync } = await import('child_process');
+    // Use spawn to run git clone with progress tracking
+    const { spawn } = await import('child_process');
     
-    try {
-      execSync(`git clone "${gitUrlWithAuth}" "${targetDir}"`, {
-        encoding: 'utf8',
-        stdio: 'pipe',
-        timeout: 60000 // 60 second timeout
+    // Create a unique session ID for this clone operation
+    const cloneSessionId = `clone_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    
+    // Send progress updates to all connected WebSocket clients for this user
+    const sendCloneProgress = (data) => {
+      const progressMessage = JSON.stringify({
+        type: 'clone-progress',
+        sessionId: cloneSessionId,
+        projectName: folderName.trim(),
+        ...data
       });
       
-      console.log(`Successfully cloned repository to ${targetDir}`);
+      connectedClients.forEach((clientInfo, ws) => {
+        if (clientInfo.username === req.user.username && ws.readyState === ws.OPEN) {
+          ws.send(progressMessage);
+        }
+      });
+    };
+    
+    // Send initial status
+    sendCloneProgress({
+      status: 'starting',
+      message: 'Initializing git clone...',
+      gitUrl: gitUrl, // Send original URL without auth
+      targetDir: targetDir
+    });
+    
+    console.log(`[Git Clone] Starting clone operation:`, {
+      sessionId: cloneSessionId,
+      user: req.user.username,
+      gitUrl: gitUrl,
+      targetDir: targetDir,
+      provider: provider || 'github',
+      useOAuth: useOAuth
+    });
+    
+    // Create a promise to handle the spawn process
+    const clonePromise = new Promise((resolve, reject) => {
+      // Use spawn with progress option
+      const gitProcess = spawn('git', ['clone', '--progress', gitUrlWithAuth, targetDir], {
+        env: { ...process.env, GIT_TERMINAL_PROMPT: '0' }, // Disable git prompts
+        stdio: ['ignore', 'pipe', 'pipe'] // ignore stdin, pipe stdout and stderr
+      });
       
-      // For cloned projects, we don't need to call addProjectManually
-      // The project will be automatically discovered when the user refreshes the project list
-      // Just create the project ownership
-      // Encode the target directory path to create session folder name
-      const encodedProjectName = encodeProjectPath(targetDir);
+      let stdoutData = '';
+      let stderrData = '';
+      let lastProgressUpdate = Date.now();
       
-      // Check if project ownership already exists
-      const existingOwner = await projectDb.getProjectOwner(encodedProjectName);
-      if (!existingOwner) {
-        // No owner yet, assign to this user
-        await projectDb.createProjectOwnership(encodedProjectName, req.user.username);
-      } else if (existingOwner !== req.user.username) {
-        // Project already owned by another user, add this user as a shared user
-        await projectDb.addProjectAccess(encodedProjectName, req.user.username, 'user');
-      }
-      // If existingOwner === req.user.username, the user already owns this project, no action needed
+      // Handle stdout (usually empty for git clone)
+      gitProcess.stdout.on('data', (data) => {
+        stdoutData += data.toString();
+        console.log(`[Git Clone ${cloneSessionId}] stdout:`, data.toString());
+      });
       
-      // Create session directory for the project
-      const sessionStorageDir = path.join(process.env.HOME, '.claude/projects');
-      const projectSessionDir = path.join(sessionStorageDir, encodedProjectName);
+      // Handle stderr (git clone sends progress here)
+      gitProcess.stderr.on('data', (data) => {
+        const output = data.toString();
+        stderrData += output;
+        
+        // Log all stderr output for debugging
+        console.log(`[Git Clone ${cloneSessionId}] stderr:`, output);
+        
+        // Parse git progress messages
+        const progressMatch = output.match(/(?:Counting objects|Compressing objects|Receiving objects|Resolving deltas):\s*(\d+)%/);
+        if (progressMatch) {
+          const progress = parseInt(progressMatch[1]);
+          const now = Date.now();
+          
+          // Throttle progress updates to every 500ms
+          if (now - lastProgressUpdate > 500) {
+            lastProgressUpdate = now;
+            sendCloneProgress({
+              status: 'progress',
+              progress: progress,
+              message: output.trim()
+            });
+          }
+        } else if (output.includes('Cloning into')) {
+          sendCloneProgress({
+            status: 'cloning',
+            message: 'Starting clone operation...'
+          });
+        } else if (output.includes('remote: Enumerating objects')) {
+          sendCloneProgress({
+            status: 'enumerating',
+            message: 'Enumerating objects...'
+          });
+        }
+      });
       
-      try {
-        await fsPromises.mkdir(projectSessionDir, { recursive: true });
-        console.log(`Created session directory: ${projectSessionDir}`);
-      } catch (err) {
-        console.error('Error creating session directory:', err);
-      }
+      // Handle process exit
+      gitProcess.on('close', async (code) => {
+        console.log(`[Git Clone ${cloneSessionId}] Process exited with code:`, code);
+        console.log(`[Git Clone ${cloneSessionId}] Final stdout:`, stdoutData);
+        console.log(`[Git Clone ${cloneSessionId}] Final stderr:`, stderrData);
+        
+        if (code === 0) {
+          console.log(`[Git Clone ${cloneSessionId}] Successfully cloned repository to ${targetDir}`);
+          
+          sendCloneProgress({
+            status: 'finalizing',
+            progress: 100,
+            message: 'Finalizing project setup...'
+          });
+          
+          try {
+            // Create project ownership
+            const encodedProjectName = encodeProjectPath(targetDir);
+            
+            const existingOwner = await projectDb.getProjectOwner(encodedProjectName);
+            if (!existingOwner) {
+              await projectDb.createProjectOwnership(encodedProjectName, req.user.username);
+            } else if (existingOwner !== req.user.username) {
+              await projectDb.addProjectAccess(encodedProjectName, req.user.username, 'user');
+            }
+            
+            // Create session directory for the project
+            const sessionStorageDir = path.join(process.env.HOME, '.claude/projects');
+            const projectSessionDir = path.join(sessionStorageDir, encodedProjectName);
+            
+            try {
+              await fsPromises.mkdir(projectSessionDir, { recursive: true });
+              console.log(`[Git Clone ${cloneSessionId}] Created session directory: ${projectSessionDir}`);
+            } catch (err) {
+              console.error(`[Git Clone ${cloneSessionId}] Error creating session directory:`, err);
+            }
+            
+            // Return project info
+            const project = {
+              name: encodedProjectName,
+              path: targetDir,
+              fullPath: targetDir,
+              displayName: folderName,
+              owner: req.user.username,
+              isShared: false,
+              sessions: []
+            };
+            
+            sendCloneProgress({
+              status: 'completed',
+              progress: 100,
+              message: 'Repository cloned successfully!',
+              project: project
+            });
+            
+            resolve({ success: true, project });
+          } catch (postCloneError) {
+            console.error(`[Git Clone ${cloneSessionId}] Post-clone error:`, postCloneError);
+            reject(postCloneError);
+          }
+        } else {
+          // Clone failed
+          const errorInfo = {
+            code: code,
+            stdout: stdoutData,
+            stderr: stderrData,
+            gitUrl: gitUrl, // Log original URL without auth
+            provider: provider || 'github'
+          };
+          
+          console.error(`[Git Clone ${cloneSessionId}] Clone failed:`, errorInfo);
+          
+          // Parse error message
+          let errorMessage = 'Failed to clone repository';
+          let errorDetails = stderrData;
+          
+          if (stderrData.includes('Authentication failed') || stderrData.includes('Invalid username or password')) {
+            errorMessage = useOAuth 
+              ? `Authentication failed. Your ${provider || 'GitHub'} token may have expired. Please reconnect your account.`
+              : 'Authentication failed. Please check your username and password.';
+            errorDetails = 'Authentication credentials were rejected by the server.';
+          } else if (stderrData.includes('Repository not found') || stderrData.includes('does not exist')) {
+            errorMessage = 'Repository not found. Please check the URL.';
+            errorDetails = 'The specified repository does not exist or you do not have access to it.';
+          } else if (stderrData.includes('Could not resolve host')) {
+            errorMessage = 'Network error. Could not connect to the server.';
+            errorDetails = 'DNS resolution failed. Please check your network connection.';
+          } else if (stderrData.includes('Connection timed out') || stderrData.includes('Operation timed out')) {
+            errorMessage = 'Connection timed out. The server may be unreachable.';
+            errorDetails = 'Network timeout occurred while trying to connect to the server.';
+          } else if (stderrData.includes('SSL certificate problem')) {
+            errorMessage = 'SSL certificate error. The server certificate may be invalid.';
+            errorDetails = stderrData;
+          } else if (stderrData.includes('fatal:')) {
+            // Extract the fatal error message
+            const fatalMatch = stderrData.match(/fatal:\s*(.+)/);
+            if (fatalMatch) {
+              errorDetails = fatalMatch[1];
+            }
+          }
+          
+          sendCloneProgress({
+            status: 'error',
+            error: errorMessage,
+            errorDetails: errorDetails
+          });
+          
+          reject(new Error(errorMessage));
+        }
+      });
       
-      // Return project info directly
-      const project = {
-        name: encodedProjectName,
-        path: targetDir,
-        fullPath: targetDir,
-        displayName: folderName,
-        owner: req.user.username,
-        isShared: false,
-        sessions: []
-      };
+      // Handle process errors
+      gitProcess.on('error', (error) => {
+        console.error(`[Git Clone ${cloneSessionId}] Process error:`, error);
+        
+        let errorMessage = 'Failed to start git process';
+        let errorDetails = error.message;
+        
+        if (error.code === 'ENOENT') {
+          errorMessage = 'Git is not installed or not in PATH';
+          errorDetails = 'Please ensure git is installed and accessible from the command line.';
+        }
+        
+        sendCloneProgress({
+          status: 'error',
+          error: errorMessage,
+          errorDetails: errorDetails
+        });
+        reject(error);
+      });
       
-      res.json({ success: true, project });
-    } catch (gitError) {
-      // Clean up the directory if clone failed
+      // Set a timeout for the clone operation (5 minutes)
+      const timeout = setTimeout(() => {
+        console.error(`[Git Clone ${cloneSessionId}] Clone operation timed out after 5 minutes`);
+        gitProcess.kill('SIGTERM');
+        sendCloneProgress({
+          status: 'error',
+          error: 'Clone operation timed out',
+          errorDetails: 'The operation took too long. The repository may be too large or the network connection is slow.'
+        });
+        reject(new Error('Clone operation timed out after 5 minutes'));
+      }, 300000); // 5 minutes
+      
+      // Clear timeout if process completes
+      gitProcess.on('exit', () => {
+        clearTimeout(timeout);
+      });
+    });
+    
+    try {
+      const result = await clonePromise;
+      res.json(result);
+    } catch (error) {
+      // Clean up partial clone
       try {
         await fsPromises.rm(targetDir, { recursive: true, force: true });
+        console.log(`[Git Clone ${cloneSessionId}] Cleaned up failed clone directory:`, targetDir);
       } catch (cleanupError) {
-        console.error('Error cleaning up failed clone directory:', cleanupError);
+        console.error(`[Git Clone ${cloneSessionId}] Error cleaning up failed clone directory:`, cleanupError);
       }
       
-      console.error('Git clone error:', gitError.message);
-      
-      // Parse git error message for better user feedback
-      let errorMessage = 'Failed to clone repository';
-      if (gitError.message.includes('Authentication failed')) {
-        errorMessage = useOAuth 
-          ? 'Authentication failed. Your GitHub token may have expired. Please reconnect your GitHub account.'
-          : 'Authentication failed. Please check your username and password.';
-      } else if (gitError.message.includes('Repository not found')) {
-        errorMessage = 'Repository not found. Please check the URL.';
-      } else if (gitError.message.includes('timeout')) {
-        errorMessage = 'Clone operation timed out. The repository may be too large.';
-      }
-      
-      return res.status(400).json({ error: errorMessage });
+      return res.status(400).json({ error: error.message });
     }
     
   } catch (error) {

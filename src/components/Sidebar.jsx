@@ -10,6 +10,7 @@ import { cn } from '../lib/utils';
 import ClaudeLogo from './ClaudeLogo';
 import { api } from '../utils/api';
 import { useAuth } from '../contexts/AuthContext';
+import { useWebSocket } from '../utils/websocket';
 
 // Helper function to clean session summary by removing [xxx] prefixes
 const cleanSessionSummary = (summary) => {
@@ -100,6 +101,12 @@ function Sidebar({
   const [generatingSummary, setGeneratingSummary] = useState({});
   const [searchFilter, setSearchFilter] = useState('');
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, action: null, data: null });
+  
+  // Clone progress state
+  const [cloneProgress, setCloneProgress] = useState(null);
+  
+  // WebSocket connection
+  const { messages } = useWebSocket();
 
   
   // Starred projects state - persisted in localStorage
@@ -280,6 +287,26 @@ function Sidebar({
       }
     }
   }, [showNewProject, projectCreationMode]);
+  
+  // Handle WebSocket messages for clone progress
+  useEffect(() => {
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage && lastMessage.type === 'clone-progress') {
+      setCloneProgress(lastMessage);
+      
+      // Clear progress when completed or error
+      if (lastMessage.status === 'completed' || lastMessage.status === 'error') {
+        // Keep the message visible for a moment before clearing
+        setTimeout(() => {
+          setCloneProgress(null);
+          // Refresh projects list on success
+          if (lastMessage.status === 'completed') {
+            onRefresh();
+          }
+        }, lastMessage.status === 'error' ? 5000 : 2000);
+      }
+    }
+  }, [messages, onRefresh]);
 
   // Load project sort order from settings
   useEffect(() => {
@@ -498,6 +525,11 @@ function Sidebar({
     
     try {
       let response;
+      
+      // Close the modal immediately for git cloning operations
+      if (projectCreationMode !== 'local') {
+        setShowNewProject(false);
+      }
       
       if (projectCreationMode === 'github') {
         // GitHub OAuth mode
@@ -1373,6 +1405,73 @@ function Sidebar({
               
               {/* Safe area for mobile */}
               <div className="h-4" />
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* Clone Progress Overlay */}
+      {cloneProgress && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-card rounded-lg border border-border p-6 max-w-md w-full shadow-xl">
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-primary/10 rounded-full flex items-center justify-center">
+                  <GitBranch className="w-5 h-5 text-primary" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-lg font-semibold text-foreground">
+                    {cloneProgress.status === 'error' ? 'Clone Failed' : 'Cloning Repository'}
+                  </h3>
+                  <p className="text-sm text-muted-foreground">{cloneProgress.projectName}</p>
+                </div>
+              </div>
+              
+              {/* Progress Bar */}
+              {cloneProgress.status !== 'error' && (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">{cloneProgress.message}</span>
+                    {cloneProgress.progress && (
+                      <span className="font-medium">{cloneProgress.progress}%</span>
+                    )}
+                  </div>
+                  <div className="h-2 bg-muted rounded-full overflow-hidden">
+                    <div 
+                      className="h-full bg-primary transition-all duration-300 ease-out"
+                      style={{ width: `${cloneProgress.progress || 0}%` }}
+                    />
+                  </div>
+                </div>
+              )}
+              
+              {/* Error Message */}
+              {cloneProgress.status === 'error' && (
+                <div className="space-y-2">
+                  <div className="text-sm text-destructive font-medium">
+                    {cloneProgress.error}
+                  </div>
+                  {cloneProgress.errorDetails && (
+                    <div className="text-xs text-muted-foreground bg-muted/50 rounded p-3 font-mono">
+                      {cloneProgress.errorDetails}
+                    </div>
+                  )}
+                </div>
+              )}
+              
+              {/* Status Messages */}
+              <div className="text-xs text-muted-foreground">
+                {cloneProgress.gitUrl && (
+                  <div className="truncate">
+                    Repository: {cloneProgress.gitUrl}
+                  </div>
+                )}
+                {cloneProgress.targetDir && (
+                  <div className="truncate">
+                    Target: {cloneProgress.targetDir}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </div>
