@@ -74,7 +74,7 @@ function Sidebar({
   const [repos, setRepos] = useState([]);
   const [loadingRepos, setLoadingRepos] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
-  const [projectCreationMode, setProjectCreationMode] = useState('github'); // 'github', 'gitea', 'git', 'local'
+  const [projectCreationMode, setProjectCreationMode] = useState('git'); // 'github', 'gitea', 'git', 'local' - default to 'git' until config is loaded
   const [gitUsername, setGitUsername] = useState('');
   const [gitPassword, setGitPassword] = useState('');
   const [localProjectPath, setLocalProjectPath] = useState('');
@@ -169,23 +169,33 @@ function Sidebar({
       try {
         // Check GitHub configuration
         const githubResponse = await fetch('/api/github/config-status');
+        let githubIsConfigured = false;
         if (githubResponse.ok) {
           const githubData = await githubResponse.json();
-          setGithubConfigured(githubData.isConfigured);
+          githubIsConfigured = githubData.isConfigured;
+          setGithubConfigured(githubIsConfigured);
         }
         
         // Check Gitea configuration
         const giteaResponse = await fetch('/api/gitea/config-status');
+        let giteaIsConfigured = false;
         if (giteaResponse.ok) {
           const giteaData = await giteaResponse.json();
-          setGiteaConfigured(giteaData.isConfigured);
-          
-          // Set default mode based on configuration
-          if (giteaData.isConfigured && !githubData.isConfigured) {
-            setProjectCreationMode('gitea');
-          } else if (!giteaData.isConfigured && !githubData.isConfigured) {
-            setProjectCreationMode('git');
-          }
+          giteaIsConfigured = giteaData.isConfigured;
+          setGiteaConfigured(giteaIsConfigured);
+        }
+        
+        // Set default mode based on configuration
+        if (githubIsConfigured && !giteaIsConfigured) {
+          setProjectCreationMode('github');
+        } else if (giteaIsConfigured && !githubIsConfigured) {
+          setProjectCreationMode('gitea');
+        } else if (githubIsConfigured && giteaIsConfigured) {
+          // If both are configured, prefer Gitea
+          setProjectCreationMode('gitea');
+        } else {
+          // If neither is configured, use git
+          setProjectCreationMode('git');
         }
       } catch (error) {
         console.error('Failed to fetch auth configuration:', error);
@@ -587,7 +597,16 @@ function Sidebar({
     setGitUsername('');
     setGitPassword('');
     setLocalProjectPath('');
-    setProjectCreationMode('github');
+    // Reset to appropriate default based on configuration
+    if (githubConfigured && !giteaConfigured) {
+      setProjectCreationMode('github');
+    } else if (giteaConfigured && !githubConfigured) {
+      setProjectCreationMode('gitea');
+    } else if (githubConfigured && giteaConfigured) {
+      setProjectCreationMode('gitea');
+    } else {
+      setProjectCreationMode('git');
+    }
     setGiteaRepos([]);
     setSelectedGiteaRepo(null);
   };
