@@ -23,7 +23,7 @@ try {
   console.log('No .env file found or error reading it:', e.message);
 }
 
-console.log('PORT from env:', process.env.PORT);
+console.log('PORT from env:', process.env.UI_PORT || process.env.PORT);
 console.log('GITHUB_CLIENT_ID from env:', process.env.GITHUB_CLIENT_ID ? 'Set' : 'Not set');
 console.log('SMTP_HOST from env:', process.env.SMTP_HOST ? 'Set' : 'Not set');
 console.log('SMTP_USER from env:', process.env.SMTP_USER ? 'Set' : 'Not set');
@@ -1592,7 +1592,7 @@ async function getFileTree(dirPath, maxDepth = 3, currentDepth = 0, showHidden =
   });
 }
 
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.UI_PORT || process.env.PORT || 3000;
 
 // Initialize database and start server
 async function startServer() {
