@@ -388,7 +388,7 @@ app.post('/api/projects/create', authenticateToken, async (req, res) => {
 // Create git project endpoint
 app.post('/api/projects/create-git', authenticateToken, async (req, res) => {
   try {
-    const { gitUrl, gitUsername, gitPassword, folderName, useOAuth, repoFullName } = req.body;
+    const { gitUrl, gitUsername, gitPassword, folderName, useOAuth, repoFullName, provider } = req.body;
     
     // Validate inputs
     if (!gitUrl || !gitUrl.trim()) {
@@ -404,14 +404,30 @@ app.post('/api/projects/create-git', authenticateToken, async (req, res) => {
     let gitUrlWithAuth;
     
     if (useOAuth) {
-      // Get user's GitHub token
       const user = await getUserById(req.user.id);
-      if (!user.github_token) {
-        return res.status(401).json({ error: 'GitHub not connected. Please connect your GitHub account first.' });
-      }
       
-      // Use OAuth token for authentication
-      gitUrlWithAuth = gitUrl.replace(/^https:\/\/github.com\//, `https://${user.github_token}@github.com/`);
+      if (provider === 'gitea') {
+        // Handle Gitea OAuth
+        if (!user.gitea_token) {
+          return res.status(401).json({ error: 'Gitea not connected. Please connect your Gitea account first.' });
+        }
+        
+        // Extract the Gitea instance URL from the git URL
+        const giteaInstanceUrl = gitUrl.match(/^(https?:\/\/[^\/]+)/)?.[1];
+        if (giteaInstanceUrl) {
+          gitUrlWithAuth = gitUrl.replace(giteaInstanceUrl, `${giteaInstanceUrl.replace(/^https?:\/\//, `https://${user.gitea_token}@`)}`);
+        } else {
+          return res.status(400).json({ error: 'Invalid Gitea repository URL' });
+        }
+      } else {
+        // Default to GitHub OAuth
+        if (!user.github_token) {
+          return res.status(401).json({ error: 'GitHub not connected. Please connect your GitHub account first.' });
+        }
+        
+        // Use OAuth token for authentication
+        gitUrlWithAuth = gitUrl.replace(/^https:\/\/github.com\//, `https://${user.github_token}@github.com/`);
+      }
     } else {
       // Legacy username/password authentication
       if (!gitUsername || !gitUsername.trim()) {
