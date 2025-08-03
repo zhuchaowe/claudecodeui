@@ -49,6 +49,16 @@ const runMigrations = () => {
       db.exec('ALTER TABLE users ADD COLUMN github_username TEXT');
     }
     
+    if (!columnExists('users', 'gitea_token')) {
+      console.log('Adding gitea_token column to users table...');
+      db.exec('ALTER TABLE users ADD COLUMN gitea_token TEXT');
+    }
+    
+    if (!columnExists('users', 'gitea_username')) {
+      console.log('Adding gitea_username column to users table...');
+      db.exec('ALTER TABLE users ADD COLUMN gitea_username TEXT');
+    }
+    
     // Check if project_access table exists, create it if not
     const projectAccessExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='project_access'").get();
     if (!projectAccessExists) {
@@ -141,6 +151,31 @@ const userDb = {
       `);
       const result = stmt.run(username, githubToken, githubUsername);
       return { id: result.lastInsertRowid, username, github_username: githubUsername };
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Get user by Gitea username
+  getUserByGiteaUsername: (giteaUsername) => {
+    try {
+      const row = db.prepare('SELECT * FROM users WHERE gitea_username = ? AND is_active = 1').get(giteaUsername);
+      return row;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Create a new user with Gitea OAuth
+  createUserWithGitea: (username, displayName, email, giteaToken, giteaUsername) => {
+    try {
+      // No password hash needed for OAuth users
+      const stmt = db.prepare(`
+        INSERT INTO users (username, password_hash, gitea_token, gitea_username) 
+        VALUES (?, '', ?, ?)
+      `);
+      const result = stmt.run(username, giteaToken, giteaUsername);
+      return { id: result.lastInsertRowid, username, gitea_username: giteaUsername };
     } catch (err) {
       throw err;
     }
@@ -298,10 +333,20 @@ const updateUserGithubToken = (userId, githubToken, githubUsername) => {
   }
 };
 
-// Get user by ID with GitHub info
+// Update user's Gitea token
+const updateUserGiteaToken = (userId, giteaToken, giteaUsername) => {
+  try {
+    const stmt = db.prepare('UPDATE users SET gitea_token = ?, gitea_username = ? WHERE id = ?');
+    stmt.run(giteaToken, giteaUsername, userId);
+  } catch (err) {
+    throw err;
+  }
+};
+
+// Get user by ID with GitHub and Gitea info
 const getUserById = (userId) => {
   try {
-    const stmt = db.prepare('SELECT id, username, created_at, last_login, github_token, github_username FROM users WHERE id = ? AND is_active = 1');
+    const stmt = db.prepare('SELECT id, username, created_at, last_login, github_token, github_username, gitea_token, gitea_username FROM users WHERE id = ? AND is_active = 1');
     return stmt.get(userId);
   } catch (err) {
     throw err;
@@ -324,5 +369,6 @@ export {
   userDb,
   projectDb,
   updateUserGithubToken,
+  updateUserGiteaToken,
   getUserById
 };

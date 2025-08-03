@@ -10,7 +10,9 @@ CREATE TABLE IF NOT EXISTS users (
     last_login DATETIME,
     is_active BOOLEAN DEFAULT 1,
     github_token TEXT,
-    github_username TEXT
+    github_username TEXT,
+    gitea_token TEXT,
+    gitea_username TEXT
 );
 
 -- Indexes for performance

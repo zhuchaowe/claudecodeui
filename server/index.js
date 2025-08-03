@@ -48,6 +48,7 @@ import gitRoutes from './routes/git.js';
 import authRoutes from './routes/auth.js';
 import mcpRoutes from './routes/mcp.js';
 import githubRoutes from './routes/github.js';
+import giteaRoutes from './routes/gitea.js';
 import emailRoutes from './routes/email.js';
 import emailService from './services/emailService.js';
 import { initializeDatabase } from './database/db.js';
@@ -243,6 +244,10 @@ app.use('/api/mcp', authenticateToken, mcpRoutes);
 // GitHub API Routes (protected and public callbacks)
 app.use('/api/github', githubRoutes);
 console.log('GitHub routes configured. GITHUB_CLIENT_ID:', process.env.GITHUB_CLIENT_ID ? 'Set' : 'Not set');
+
+// Gitea API Routes (protected and public callbacks)
+app.use('/api/gitea', giteaRoutes);
+console.log('Gitea routes configured. GITEA_CLIENT_ID:', process.env.GITEA_CLIENT_ID ? 'Set' : 'Not set');
 
 // Email API Routes (protected)
 app.use('/api/email', emailRoutes);
