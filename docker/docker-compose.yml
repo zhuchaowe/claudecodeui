@@ -67,6 +67,9 @@ services:
       # Logs storage
       - claude-logs:/app/logs
       
+      # Node home directory for persistent data
+      - claude-node-home:/home/node
+      
       # Optional: Mount .env file if you want to update it without rebuilding
       - ${ENV_FILE:-../.env}:/app/.env:ro
       
@@ -96,4 +99,6 @@ volumes:
   claude-database:
     driver: local
   claude-logs:
+    driver: local
+  claude-node-home:
     driver: local
