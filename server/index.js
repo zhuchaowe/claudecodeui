@@ -252,6 +252,152 @@ console.log('Gitea routes configured. GITEA_CLIENT_ID:', process.env.GITEA_CLIEN
 // Email API Routes (protected)
 app.use('/api/email', emailRoutes);
 
+// Proxy Configuration API Routes (protected)
+app.get('/api/proxy-config', authenticateToken, async (req, res) => {
+  try {
+    // Get user's proxy configuration from database
+    const user = projectDb.prepare('SELECT proxy_config FROM users WHERE id = ?').get(req.user.id);
+    
+    if (!user || !user.proxy_config) {
+      // Return default config if not set
+      return res.json({
+        enabled: false,
+        openaiApiKey: '',
+        openaiBaseUrl: '',
+        bigModel: '',
+        smallModel: ''
+      });
+    }
+    
+    const config = JSON.parse(user.proxy_config);
+    
+    // Mask API key for security
+    if (config.openaiApiKey) {
+      config.openaiApiKey = '***' + config.openaiApiKey.slice(-4);
+    }
+    
+    res.json(config);
+  } catch (error) {
+    console.error('Error getting proxy config:', error);
+    res.status(500).json({ error: 'Failed to get proxy configuration' });
+  }
+});
+
+app.post('/api/proxy-config', authenticateToken, async (req, res) => {
+  try {
+    const { openaiApiKey, openaiBaseUrl, bigModel, smallModel } = req.body;
+    
+    // Validate required fields
+    if (!openaiApiKey) {
+      return res.status(400).json({ error: 'API key is required' });
+    }
+    
+    // Create proxy config object
+    const proxyConfig = {
+      enabled: true,
+      openaiApiKey: openaiApiKey,
+      openaiBaseUrl: openaiBaseUrl || 'https://api.openai.com/v1',
+      bigModel: bigModel || 'gpt-4',
+      smallModel: smallModel || 'gpt-3.5-turbo'
+    };
+    
+    // Save to database
+    projectDb.prepare('UPDATE users SET proxy_config = ? WHERE id = ?')
+      .run(JSON.stringify(proxyConfig), req.user.id);
+    
+    // Return masked config
+    res.json({ 
+      success: true, 
+      message: 'Proxy configuration saved successfully',
+      config: {
+        enabled: true,
+        openaiApiKey: '***' + openaiApiKey.slice(-4),
+        openaiBaseUrl: proxyConfig.openaiBaseUrl,
+        bigModel: proxyConfig.bigModel,
+        smallModel: proxyConfig.smallModel
+      }
+    });
+  } catch (error) {
+    console.error('Error saving proxy config:', error);
+    res.status(500).json({ error: 'Failed to save proxy configuration' });
+  }
+});
+
+app.delete('/api/proxy-config', authenticateToken, async (req, res) => {
+  try {
+    // Clear user's proxy configuration
+    const disabledConfig = {
+      enabled: false,
+      openaiApiKey: '',
+      openaiBaseUrl: '',
+      bigModel: '',
+      smallModel: ''
+    };
+    
+    projectDb.prepare('UPDATE users SET proxy_config = ? WHERE id = ?')
+      .run(JSON.stringify(disabledConfig), req.user.id);
+    
+    res.json({ 
+      success: true, 
+      message: 'Proxy configuration disabled successfully' 
+    });
+  } catch (error) {
+    console.error('Error disabling proxy config:', error);
+    res.status(500).json({ error: 'Failed to disable proxy configuration' });
+  }
+});
+
+// Test proxy connection endpoint
+app.post('/api/proxy-config/test', authenticateToken, async (req, res) => {
+  try {
+    const { openaiApiKey, openaiBaseUrl, bigModel } = req.body;
+    
+    if (!openaiApiKey || !openaiBaseUrl) {
+      return res.status(400).json({ error: 'API key and base URL are required for testing' });
+    }
+    
+    // Try to make a simple API call to test the connection
+    const testUrl = openaiBaseUrl.replace(/\/$/, '') + '/models';
+    
+    const response = await fetch(testUrl, {
+      headers: {
+        'Authorization': `Bearer ${openaiApiKey}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    
+    if (response.ok) {
+      const data = await response.json();
+      // Check if the specified model exists
+      let modelExists = false;
+      if (data.data && Array.isArray(data.data)) {
+        modelExists = data.data.some(model => model.id === bigModel);
+      }
+      
+      res.json({ 
+        success: true, 
+        message: 'Connection successful',
+        modelExists,
+        availableModels: data.data ? data.data.map(m => m.id) : []
+      });
+    } else {
+      const errorText = await response.text();
+      res.json({ 
+        success: false, 
+        message: `Connection failed: ${response.status} ${response.statusText}`,
+        error: errorText
+      });
+    }
+  } catch (error) {
+    console.error('Error testing proxy connection:', error);
+    res.json({ 
+      success: false, 
+      message: 'Connection test failed',
+      error: error.message 
+    });
+  }
+});
+
 // Static files served after API routes
 app.use(express.static(path.join(__dirname, '../dist')));
 

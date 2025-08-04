@@ -100,5 +100,21 @@ export const api = {
     disconnect: () => authenticatedFetch('/api/gitea/disconnect', { method: 'POST' }),
     repos: (page = 1, limit = 30) => 
       authenticatedFetch(`/api/gitea/repos?page=${page}&limit=${limit}`),
+  },
+  
+  // Proxy configuration endpoints
+  proxyConfig: {
+    get: () => authenticatedFetch('/api/proxy-config'),
+    save: (config) => authenticatedFetch('/api/proxy-config', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    }),
+    disable: () => authenticatedFetch('/api/proxy-config', {
+      method: 'DELETE',
+    }),
+    test: (config) => authenticatedFetch('/api/proxy-config/test', {
+      method: 'POST',
+      body: JSON.stringify(config),
+    }),
   }
 };

@@ -255,10 +255,39 @@ async function spawnClaude(command, options = {}, ws) {
     console.log('🔍 Full command args:', JSON.stringify(args, null, 2));
     console.log('🔍 Final CLI command will be: ' + cliCommand + ' ' + args.join(' '));
     
+    // Get user's proxy configuration from database
+    let userProxyEnv = {};
+    if (username) {
+      try {
+        const userQuery = projectDb.prepare('SELECT proxy_config FROM users WHERE username = ?').get(username);
+        if (userQuery && userQuery.proxy_config) {
+          const proxyConfig = JSON.parse(userQuery.proxy_config);
+          if (proxyConfig.enabled && proxyConfig.openaiApiKey) {
+            // Set proxy environment variables for this session
+            userProxyEnv = {
+              OPENAI_API_KEY: proxyConfig.openaiApiKey,
+              OPENAI_BASE_URL: proxyConfig.openaiBaseUrl || 'https://api.openai.com/v1',
+              BIG_MODEL: proxyConfig.bigModel || 'gpt-4',
+              SMALL_MODEL: proxyConfig.smallModel || 'gpt-3.5-turbo',
+              // When proxy is enabled, override Anthropic base URL
+              ANTHROPIC_BASE_URL: 'http://localhost:8082',
+              ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN || 'proxy-key'
+            };
+            console.log('🔑 Using user proxy configuration for', username);
+          }
+        }
+      } catch (error) {
+        console.error('Error loading user proxy config:', error);
+      }
+    }
+    
     // Ensure working directory exists before spawning
     const spawnOptions = {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env } // Inherit all environment variables
+      env: { 
+        ...process.env,
+        ...userProxyEnv // Override with user's proxy settings if configured
+      }
     };
     
     // Check if working directory exists
