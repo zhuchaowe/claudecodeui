@@ -11,7 +11,9 @@ const getGithubConfig = () => ({
   GITHUB_CLIENT_ID: process.env.GITHUB_CLIENT_ID,
   GITHUB_CLIENT_SECRET: process.env.GITHUB_CLIENT_SECRET,
   GITHUB_REDIRECT_URI: process.env.GITHUB_REDIRECT_URI || 'http://localhost:3008/api/github/callback',
-  GITHUB_ALLOWED_ORGS: process.env.GITHUB_ALLOWED_ORGS?.split(',').map(org => org.trim()) || [],
+  GITHUB_ALLOWED_ORGS: process.env.GITHUB_ALLOWED_ORGS?.trim() 
+    ? process.env.GITHUB_ALLOWED_ORGS.split(',').map(org => org.trim()).filter(org => org.length > 0)
+    : [],
   GITHUB_REQUIRED_STAR_REPO: process.env.GITHUB_REQUIRED_STAR_REPO
 });
 
@@ -84,9 +86,11 @@ const checkUserStarredRepo = async (accessToken, requiredRepo) => {
 // Get allowed organizations configuration
 router.get('/allowed-orgs', (req, res) => {
   const { GITHUB_ALLOWED_ORGS } = getGithubConfig();
+  // Filter out empty strings to handle case when env var is empty
+  const validOrgs = GITHUB_ALLOWED_ORGS.filter(org => org.length > 0);
   res.json({ 
-    hasRestrictions: GITHUB_ALLOWED_ORGS.length > 0,
-    organizations: GITHUB_ALLOWED_ORGS 
+    hasRestrictions: validOrgs.length > 0,
+    organizations: validOrgs 
   });
 });
 
