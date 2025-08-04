@@ -765,4 +765,19 @@
     background-color: rgb(31 41 55) !important;
     color: rgb(243 244 246) !important;
   }
+  
+  /* Line clamp utilities for template selector */
+  .line-clamp-2 {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  
+  .line-clamp-3 {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
 }

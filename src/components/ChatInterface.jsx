@@ -23,6 +23,7 @@ import TodoList from './TodoList';
 import FloatingTodoList from './FloatingTodoList';
 import ClaudeLogo from './ClaudeLogo.jsx';
 import CollapsibleJson from './CollapsibleJson.jsx';
+import TemplateSelector from './TemplateSelector.jsx';
 
 import ClaudeStatus from './ClaudeStatus';
 import { MicButton } from './MicButton.jsx';
@@ -1261,6 +1262,7 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
   const [claudeStatus, setClaudeStatus] = useState(null);
   const [currentTodos, setCurrentTodos] = useState(null);
   const [showFloatingTodos, setShowFloatingTodos] = useState(false);
+  const [showTemplateSelector, setShowTemplateSelector] = useState(false);
 
 
   // Memoized diff calculation to prevent recalculating on every render
@@ -2429,6 +2431,31 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
     setPermissionMode(modes[nextIndex]);
   };
 
+  const handleTemplateSelect = (templateContent) => {
+    // Insert template content into input
+    setInput(prev => {
+      const newInput = prev.trim() ? `${prev}\n\n${templateContent}` : templateContent;
+      
+      // Update textarea height after setting new content
+      setTimeout(() => {
+        if (textareaRef.current) {
+          textareaRef.current.style.height = 'auto';
+          textareaRef.current.style.height = textareaRef.current.scrollHeight + 'px';
+          textareaRef.current.focus();
+          
+          // Check if expanded after adding template
+          const lineHeight = parseInt(window.getComputedStyle(textareaRef.current).lineHeight);
+          const isExpanded = textareaRef.current.scrollHeight > lineHeight * 2;
+          setIsTextareaExpanded(isExpanded);
+        }
+      }, 0);
+      
+      return newInput;
+    });
+    
+    setShowTemplateSelector(false);
+  };
+
   // Don't render if no project is selected
   if (!selectedProject) {
     return (
@@ -2681,7 +2708,7 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
               placeholder="Ask Claude to help with your code... (@ to reference files)"
               disabled={isLoading}
               rows={1}
-              className="chat-input-placeholder w-full pl-12 pr-28 sm:pr-40 py-3 sm:py-4 bg-transparent rounded-2xl focus:outline-none text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 disabled:opacity-50 resize-none min-h-[40px] sm:min-h-[56px] max-h-[40vh] sm:max-h-[300px] overflow-y-auto text-sm sm:text-base transition-all duration-200"
+              className="chat-input-placeholder w-full pl-20 pr-28 sm:pr-40 py-3 sm:py-4 bg-transparent rounded-2xl focus:outline-none text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 disabled:opacity-50 resize-none min-h-[40px] sm:min-h-[56px] max-h-[40vh] sm:max-h-[300px] overflow-y-auto text-sm sm:text-base transition-all duration-200"
               style={{ height: 'auto' }}
             />
             {/* Clear button - shown when there's text */}
@@ -2726,15 +2753,27 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
                 </svg>
               </button>
             )}
+            {/* Template selector button */}
+            <button
+              type="button"
+              onClick={() => setShowTemplateSelector(true)}
+              className="absolute left-2 top-1/2 transform -translate-y-1/2 p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              title="选择提示词模板"
+            >
+              <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            </button>
+            
             {/* Image upload button */}
             <button
               type="button"
               onClick={open}
-              className="absolute left-2 bottom-4 p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+              className="absolute left-12 top-1/2 transform -translate-y-1/2 p-2 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
               title="Attach images"
             >
               <svg className="w-5 h-5 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 002 2z" />
               </svg>
             </button>
             
@@ -2799,6 +2838,13 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
         setShowFloatingTodos(false);
         setCurrentTodos(null);
       }}
+    />
+    
+    {/* Template Selector */}
+    <TemplateSelector
+      isVisible={showTemplateSelector}
+      onSelect={handleTemplateSelect}
+      onClose={() => setShowTemplateSelector(false)}
     />
     </>
   );
