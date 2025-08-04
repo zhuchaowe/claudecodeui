@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS users (
     github_token TEXT,
     github_username TEXT,
     gitea_token TEXT,
-    gitea_username TEXT
+    gitea_username TEXT,
+    anthropic_config TEXT
 );
 
 -- Indexes for performance

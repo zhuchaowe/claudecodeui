@@ -62,7 +62,17 @@ const runMigrations = () => {
     
     if (!columnExists('users', 'anthropic_config')) {
       console.log('Adding anthropic_config column to users table...');
-      db.exec('ALTER TABLE users ADD COLUMN anthropic_config TEXT');
+      try {
+        db.exec('ALTER TABLE users ADD COLUMN anthropic_config TEXT');
+        console.log('Successfully added anthropic_config column');
+      } catch (error) {
+        if (error.message.includes('duplicate column name')) {
+          console.log('anthropic_config column already exists');
+        } else {
+          console.error('Error adding anthropic_config column:', error.message);
+          throw error;
+        }
+      }
     }
     
     // Check if project_access table exists, create it if not
