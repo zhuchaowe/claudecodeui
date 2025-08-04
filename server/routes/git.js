@@ -764,11 +764,37 @@ router.post('/pull', async (req, res) => {
       }
     }
 
-    const { stdout } = await execAsync(`git pull ${remoteName} ${remoteBranch}`, { cwd: projectPath });
+    let pullOutput;
+    try {
+      const { stdout } = await execAsync(`git pull ${remoteName} ${remoteBranch}`, { cwd: projectPath });
+      pullOutput = stdout;
+    } catch (pullError) {
+      // Check if the error is about divergent branches
+      if (pullError.message.includes('divergent branches') || 
+          pullError.message.includes('need to specify how to reconcile them')) {
+        console.log('Detected divergent branches, auto-configuring pull strategy...');
+        
+        try {
+          // Auto-configure git to use merge strategy for pulls
+          await execAsync('git config pull.rebase false', { cwd: projectPath });
+          console.log('Successfully configured git pull.rebase = false');
+          
+          // Retry the pull operation
+          const { stdout } = await execAsync(`git pull ${remoteName} ${remoteBranch}`, { cwd: projectPath });
+          pullOutput = stdout;
+        } catch (retryError) {
+          // If retry also fails, throw the retry error
+          throw retryError;
+        }
+      } else {
+        // If it's not a divergent branches error, throw the original error
+        throw pullError;
+      }
+    }
     
     res.json({ 
       success: true, 
-      output: stdout || 'Pull completed successfully', 
+      output: pullOutput || 'Pull completed successfully', 
       remoteName,
       remoteBranch,
       credentialHelperConfigured: setupCredentialHelper
