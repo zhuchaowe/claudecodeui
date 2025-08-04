@@ -2,7 +2,7 @@ import { spawn } from 'child_process';
 import { promises as fs, existsSync } from 'fs';
 import path from 'path';
 import os from 'os';
-import { projectDb } from './database/db.js';
+import { db, projectDb } from './database/db.js';
 import { backupProject, encodeProjectPath } from './projects.js';
 
 let activeClaudeProcesses = new Map(); // Track active processes by session ID
@@ -259,7 +259,7 @@ async function spawnClaude(command, options = {}, ws) {
     let userAnthropicEnv = {};
     if (username) {
       try {
-        const userQuery = projectDb.prepare('SELECT anthropic_config FROM users WHERE username = ?').get(username);
+        const userQuery = db.prepare('SELECT anthropic_config FROM users WHERE username = ?').get(username);
         if (userQuery && userQuery.anthropic_config) {
           const anthropicConfig = JSON.parse(userQuery.anthropic_config);
           if (anthropicConfig.enabled) {

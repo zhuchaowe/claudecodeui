@@ -42,7 +42,7 @@ import fetch from 'node-fetch';
 import mime from 'mime-types';
 
 import { getProjects, getSessions, getSessionMessages, renameProject, deleteSession, deleteProject, removeProjectAccess, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, getUserProjectsDir, encodeProjectPath, backupProject, restoreProject, backupAllUserProjects, checkAndRestoreMissingProjects } from './projects.js';
-import { projectDb } from './database/db.js';
+import { db, projectDb } from './database/db.js';
 import { spawnClaude, abortClaudeSession } from './claude-cli.js';
 import gitRoutes from './routes/git.js';
 import authRoutes from './routes/auth.js';
@@ -256,7 +256,7 @@ app.use('/api/email', emailRoutes);
 app.get('/api/anthropic-config', authenticateToken, async (req, res) => {
   try {
     // Get user's anthropic configuration from database
-    const user = projectDb.prepare('SELECT anthropic_config FROM users WHERE id = ?').get(req.user.id);
+    const user = db.prepare('SELECT anthropic_config FROM users WHERE id = ?').get(req.user.id);
     
     if (!user || !user.anthropic_config) {
       // Return default config if not set
@@ -303,7 +303,7 @@ app.post('/api/anthropic-config', authenticateToken, async (req, res) => {
     };
     
     // Save to database
-    projectDb.prepare('UPDATE users SET anthropic_config = ? WHERE id = ?')
+    db.prepare('UPDATE users SET anthropic_config = ? WHERE id = ?')
       .run(JSON.stringify(anthropicConfig), req.user.id);
     
     // Return masked config
@@ -333,7 +333,7 @@ app.delete('/api/anthropic-config', authenticateToken, async (req, res) => {
       anthropicApiKey: ''
     };
     
-    projectDb.prepare('UPDATE users SET anthropic_config = ? WHERE id = ?')
+    db.prepare('UPDATE users SET anthropic_config = ? WHERE id = ?')
       .run(JSON.stringify(disabledConfig), req.user.id);
     
     res.json({ 
