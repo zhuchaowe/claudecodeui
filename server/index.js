@@ -34,7 +34,7 @@ import { WebSocketServer } from 'ws';
 import http from 'http';
 import cors from 'cors';
 import { promises as fsPromises } from 'fs';
-import { spawn } from 'child_process';
+import { spawn, exec } from 'child_process';
 import os from 'os';
 import pty from 'node-pty';
 import crypto from 'crypto';
@@ -732,6 +732,66 @@ app.post('/api/projects/create-git', authenticateToken, async (req, res) => {
           });
           
           try {
+            // Configure git credential helper for the cloned repository
+            console.log(`[Git Clone ${cloneSessionId}] Setting up git credential helper...`);
+            try {
+              // Set credential.helper to store for this repository
+              await new Promise((resolve, reject) => {
+                exec('git config credential.helper store', { cwd: targetDir }, (error, stdout, stderr) => {
+                  if (error) {
+                    console.error(`[Git Clone ${cloneSessionId}] Failed to set credential helper:`, error);
+                    // Don't fail the whole clone operation if this fails
+                    resolve();
+                  } else {
+                    console.log(`[Git Clone ${cloneSessionId}] Successfully configured credential.helper store`);
+                    resolve();
+                  }
+                });
+              });
+              
+              // If we have authentication credentials, store them
+              if (gitUrlWithAuth !== gitUrl && gitUrlWithAuth.includes('@')) {
+                console.log(`[Git Clone ${cloneSessionId}] Storing credentials for future use...`);
+                
+                // Extract credentials from the authenticated URL
+                const urlMatch = gitUrlWithAuth.match(/https:\/\/([^:]+):([^@]+)@(.+)/);
+                if (urlMatch) {
+                  const [, username, password, hostAndPath] = urlMatch;
+                  const homeDir = process.env.HOME || process.env.USERPROFILE;
+                  const credentialsFile = path.join(homeDir, '.git-credentials');
+                  
+                  // Create credential entry
+                  const credentialEntry = `https://${username}:${password}@${hostAndPath}\n`;
+                  
+                  // Append to git-credentials file
+                  try {
+                    // Check if credentials already exist to avoid duplicates
+                    let existingCredentials = '';
+                    try {
+                      existingCredentials = await fsPromises.readFile(credentialsFile, 'utf-8');
+                    } catch (error) {
+                      // File doesn't exist, that's fine
+                    }
+                    
+                    // Extract just the host for comparison
+                    const host = hostAndPath.split('/')[0];
+                    if (!existingCredentials.includes(host)) {
+                      await fsPromises.appendFile(credentialsFile, credentialEntry, { mode: 0o600 });
+                      console.log(`[Git Clone ${cloneSessionId}] Credentials stored for ${host}`);
+                    } else {
+                      console.log(`[Git Clone ${cloneSessionId}] Credentials already exist for ${host}`);
+                    }
+                  } catch (error) {
+                    console.error(`[Git Clone ${cloneSessionId}] Failed to store credentials:`, error);
+                    // Don't fail the whole operation
+                  }
+                }
+              }
+            } catch (credentialError) {
+              console.error(`[Git Clone ${cloneSessionId}] Error setting up credentials:`, credentialError);
+              // Don't fail the whole clone operation
+            }
+            
             // Create project ownership
             const encodedProjectName = encodeProjectPath(targetDir, req.user.username);
             
