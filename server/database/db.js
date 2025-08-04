@@ -7,11 +7,17 @@ import { dirname } from 'path';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const DB_PATH = path.join(__dirname, 'auth.db');
+const DB_PATH = path.join(__dirname, 'data', 'auth.db');
 const INIT_SQL_PATH = path.join(__dirname, 'init.sql');
 const PROJECTS_SQL_PATH = path.join(__dirname, 'projects-ownership.sql');
 const SHARED_PROJECTS_SQL_PATH = path.join(__dirname, 'migrate-shared-projects.sql');
 const PATH_MAPPINGS_SQL_PATH = path.join(__dirname, 'path-mappings.sql');
+
+// Ensure data directory exists
+const dataDir = path.join(__dirname, 'data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
+}
 
 // Create database connection
 const db = new Database(DB_PATH);

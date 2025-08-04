@@ -61,8 +61,8 @@ services:
       # Backup storage
       - claude-backup:/app/data/backup
       
-      # Database storage
-      - claude-database:/app/server/database
+      # Database storage (only data files, not scripts)
+      - claude-database:/app/server/database/data
       
       # Logs storage
       - claude-logs:/app/logs
