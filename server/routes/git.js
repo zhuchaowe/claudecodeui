@@ -70,6 +70,97 @@ async function validateGitRepository(projectPath) {
   }
 }
 
+// Check git configuration
+router.get('/check-config', async (req, res) => {
+  const { project } = req.query;
+  
+  if (!project) {
+    return res.status(400).json({ error: 'Project name is required' });
+  }
+
+  try {
+    const projectPath = await getActualProjectPath(project, req.user?.username);
+    
+    // Check git user name and email
+    let userName = '';
+    let userEmail = '';
+    
+    try {
+      const { stdout: name } = await execAsync('git config user.name', { cwd: projectPath });
+      userName = name.trim();
+    } catch (error) {
+      // No local user.name configured
+    }
+    
+    try {
+      const { stdout: email } = await execAsync('git config user.email', { cwd: projectPath });
+      userEmail = email.trim();
+    } catch (error) {
+      // No local user.email configured
+    }
+    
+    // If no local config, check global
+    if (!userName) {
+      try {
+        const { stdout: globalName } = await execAsync('git config --global user.name', { cwd: projectPath });
+        userName = globalName.trim();
+      } catch (error) {
+        // No global user.name configured
+      }
+    }
+    
+    if (!userEmail) {
+      try {
+        const { stdout: globalEmail } = await execAsync('git config --global user.email', { cwd: projectPath });
+        userEmail = globalEmail.trim();
+      } catch (error) {
+        // No global user.email configured
+      }
+    }
+    
+    res.json({
+      hasConfig: !!(userName && userEmail),
+      userName,
+      userEmail
+    });
+  } catch (error) {
+    console.error('Git config check error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Set git configuration
+router.post('/set-config', async (req, res) => {
+  const { project, userName, userEmail, scope = 'local' } = req.body;
+  
+  if (!project || !userName || !userEmail) {
+    return res.status(400).json({ error: 'Project name, user name, and email are required' });
+  }
+
+  try {
+    const projectPath = await getActualProjectPath(project, req.user?.username);
+    
+    // Validate git repository
+    await validateGitRepository(projectPath);
+    
+    // Set git config
+    const globalFlag = scope === 'global' ? '--global' : '';
+    
+    await execAsync(`git config ${globalFlag} user.name "${userName}"`, { cwd: projectPath });
+    await execAsync(`git config ${globalFlag} user.email "${userEmail}"`, { cwd: projectPath });
+    
+    res.json({ 
+      success: true, 
+      message: `Git configuration set successfully (${scope})`,
+      userName,
+      userEmail
+    });
+  } catch (error) {
+    console.error('Git set config error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Get git status for a project
 router.get('/status', async (req, res) => {
   const { project } = req.query;
@@ -1160,6 +1251,195 @@ router.post('/delete-untracked', async (req, res) => {
   } catch (error) {
     console.error('Git delete untracked error:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Get list of tags
+router.get('/tags', async (req, res) => {
+  const { project } = req.query;
+  
+  if (!project) {
+    return res.status(400).json({ error: 'Project name is required' });
+  }
+
+  try {
+    const projectPath = await getActualProjectPath(project, req.user?.username);
+    console.log('Git tags for project:', project, '-> path:', projectPath);
+    
+    // Validate git repository
+    await validateGitRepository(projectPath);
+    
+    // Get all tags with their commit info
+    const { stdout: tagOutput } = await execAsync('git tag -l --sort=-version:refname', { cwd: projectPath });
+    
+    const tags = [];
+    if (tagOutput.trim()) {
+      const tagNames = tagOutput.trim().split('\n');
+      
+      // Get additional info for each tag
+      for (const tagName of tagNames) {
+        try {
+          // Get tag commit hash and date
+          const { stdout: tagInfo } = await execAsync(
+            `git log -1 --format="%H|%an|%ae|%ad|%s" --date=relative ${tagName}`,
+            { cwd: projectPath }
+          );
+          
+          if (tagInfo.trim()) {
+            const [hash, author, email, date, ...messageParts] = tagInfo.trim().split('|');
+            tags.push({
+              name: tagName,
+              hash,
+              author,
+              email,
+              date,
+              message: messageParts.join('|')
+            });
+          }
+        } catch (error) {
+          console.error(`Error getting info for tag ${tagName}:`, error);
+          // Add basic tag info if detailed info fails
+          tags.push({
+            name: tagName,
+            hash: '',
+            author: '',
+            email: '',
+            date: '',
+            message: ''
+          });
+        }
+      }
+    }
+    
+    res.json({ tags });
+  } catch (error) {
+    console.error('Git tags error:', error);
+    res.json({ error: error.message });
+  }
+});
+
+// Create new tag
+router.post('/create-tag', async (req, res) => {
+  const { project, tagName, message, commitHash } = req.body;
+  
+  if (!project || !tagName) {
+    return res.status(400).json({ error: 'Project name and tag name are required' });
+  }
+
+  try {
+    const projectPath = await getActualProjectPath(project, req.user?.username);
+    
+    // Validate git repository
+    await validateGitRepository(projectPath);
+    
+    // Create tag command
+    let tagCommand;
+    if (message) {
+      // Annotated tag with message
+      const target = commitHash || 'HEAD';
+      tagCommand = `git tag -a "${tagName}" -m "${message.replace(/"/g, '\\"')}" ${target}`;
+    } else {
+      // Lightweight tag
+      const target = commitHash || 'HEAD';
+      tagCommand = `git tag "${tagName}" ${target}`;
+    }
+    
+    const { stdout } = await execAsync(tagCommand, { cwd: projectPath });
+    
+    res.json({ success: true, output: stdout || 'Tag created successfully', tagName });
+  } catch (error) {
+    console.error('Git create tag error:', error);
+    
+    let errorMessage = 'Tag creation failed';
+    let details = error.message;
+    
+    if (error.message.includes('already exists')) {
+      errorMessage = 'Tag already exists';
+      details = `A tag named "${tagName}" already exists. Choose a different name.`;
+    } else if (error.message.includes('not a valid object name')) {
+      errorMessage = 'Invalid commit';
+      details = 'The specified commit hash is not valid.';
+    }
+    
+    res.status(500).json({ 
+      error: errorMessage, 
+      details: details
+    });
+  }
+});
+
+// Delete tag
+router.post('/delete-tag', async (req, res) => {
+  const { project, tagName } = req.body;
+  
+  if (!project || !tagName) {
+    return res.status(400).json({ error: 'Project name and tag name are required' });
+  }
+
+  try {
+    const projectPath = await getActualProjectPath(project, req.user?.username);
+    
+    // Validate git repository
+    await validateGitRepository(projectPath);
+    
+    // Delete tag
+    const { stdout } = await execAsync(`git tag -d "${tagName}"`, { cwd: projectPath });
+    
+    res.json({ success: true, output: stdout || 'Tag deleted successfully', tagName });
+  } catch (error) {
+    console.error('Git delete tag error:', error);
+    
+    let errorMessage = 'Tag deletion failed';
+    let details = error.message;
+    
+    if (error.message.includes('not found')) {
+      errorMessage = 'Tag not found';
+      details = `Tag "${tagName}" does not exist.`;
+    }
+    
+    res.status(500).json({ 
+      error: errorMessage, 
+      details: details
+    });
+  }
+});
+
+// Checkout tag
+router.post('/checkout-tag', async (req, res) => {
+  const { project, tagName } = req.body;
+  
+  if (!project || !tagName) {
+    return res.status(400).json({ error: 'Project name and tag name are required' });
+  }
+
+  try {
+    const projectPath = await getActualProjectPath(project, req.user?.username);
+    
+    // Validate git repository
+    await validateGitRepository(projectPath);
+    
+    // Checkout the tag (this will put the repository in detached HEAD state)
+    const { stdout } = await execAsync(`git checkout "${tagName}"`, { cwd: projectPath });
+    
+    res.json({ success: true, output: stdout || 'Tag checked out successfully', tagName });
+  } catch (error) {
+    console.error('Git checkout tag error:', error);
+    
+    let errorMessage = 'Tag checkout failed';
+    let details = error.message;
+    
+    if (error.message.includes('did not match any file(s) known to git')) {
+      errorMessage = 'Tag not found';
+      details = `Tag "${tagName}" does not exist.`;
+    } else if (error.message.includes('Please commit your changes or stash them')) {
+      errorMessage = 'Uncommitted changes detected';
+      details = 'Please commit or stash your local changes before checking out the tag.';
+    }
+    
+    res.status(500).json({ 
+      error: errorMessage, 
+      details: details
+    });
   }
 });
 

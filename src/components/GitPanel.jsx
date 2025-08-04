@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { GitBranch, GitCommit, Plus, Minus, RefreshCw, Check, X, ChevronDown, ChevronRight, Info, History, FileText, Mic, MicOff, Sparkles, Download, RotateCcw, Trash2, AlertTriangle, Upload } from 'lucide-react';
+import { GitBranch, GitCommit, Plus, Minus, RefreshCw, Check, X, ChevronDown, ChevronRight, Info, History, FileText, Mic, MicOff, Sparkles, Download, RotateCcw, Trash2, AlertTriangle, Upload, Tag, Edit2 } from 'lucide-react';
 import { MicButton } from './MicButton.jsx';
 import { authenticatedFetch } from '../utils/api';
 import GitCredentialModal from './GitCredentialModal.jsx';
+import { useAuth } from '../contexts/AuthContext.jsx';
 
 function GitPanel({ selectedProject, isMobile }) {
+  const { user } = useAuth();
   const [gitStatus, setGitStatus] = useState(null);
   const [gitDiff, setGitDiff] = useState({});
   const [isLoading, setIsLoading] = useState(false);
@@ -20,7 +22,7 @@ function GitPanel({ selectedProject, isMobile }) {
   const [showNewBranchModal, setShowNewBranchModal] = useState(false);
   const [newBranchName, setNewBranchName] = useState('');
   const [isCreatingBranch, setIsCreatingBranch] = useState(false);
-  const [activeView, setActiveView] = useState('changes'); // 'changes' or 'history'
+  const [activeView, setActiveView] = useState('changes'); // 'changes', 'history', or 'tags'
   const [recentCommits, setRecentCommits] = useState([]);
   const [expandedCommits, setExpandedCommits] = useState(new Set());
   const [commitDiffs, setCommitDiffs] = useState({});
@@ -36,6 +38,17 @@ function GitPanel({ selectedProject, isMobile }) {
   const [credentialError, setCredentialError] = useState('');
   const [remoteType, setRemoteType] = useState('generic');
   const [pendingPushCredentials, setPendingPushCredentials] = useState(null);
+  const [tags, setTags] = useState([]);
+  const [showCreateTagModal, setShowCreateTagModal] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagMessage, setNewTagMessage] = useState('');
+  const [isCreatingTag, setIsCreatingTag] = useState(false);
+  const [selectedCommitForTag, setSelectedCommitForTag] = useState(null);
+  const [showGitConfigModal, setShowGitConfigModal] = useState(false);
+  const [gitConfig, setGitConfig] = useState({ userName: '', userEmail: '' });
+  const [configScope, setConfigScope] = useState('local'); // 'local' or 'global'
+  const [isCheckingConfig, setIsCheckingConfig] = useState(false);
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
   const textareaRef = useRef(null);
   const dropdownRef = useRef(null);
 
@@ -46,6 +59,8 @@ function GitPanel({ selectedProject, isMobile }) {
       fetchRemoteStatus();
       if (activeView === 'history') {
         fetchRecentCommits();
+      } else if (activeView === 'tags') {
+        fetchTags();
       }
     }
   }, [selectedProject, activeView]);
@@ -138,6 +153,100 @@ function GitPanel({ selectedProject, isMobile }) {
     }
   };
 
+  const fetchTags = async () => {
+    if (!selectedProject) return;
+    
+    try {
+      const response = await authenticatedFetch(`/api/git/tags?project=${encodeURIComponent(selectedProject.name)}`);
+      const data = await response.json();
+      
+      if (!data.error && data.tags) {
+        setTags(data.tags);
+      } else {
+        setTags([]);
+      }
+    } catch (error) {
+      console.error('Error fetching tags:', error);
+      setTags([]);
+    }
+  };
+
+  const checkGitConfig = async () => {
+    if (!selectedProject) return;
+    
+    setIsCheckingConfig(true);
+    try {
+      const response = await authenticatedFetch(`/api/git/check-config?project=${encodeURIComponent(selectedProject.name)}`);
+      const data = await response.json();
+      
+      if (data.hasConfig) {
+        setGitConfig({
+          userName: data.userName,
+          userEmail: data.userEmail
+        });
+        return true;
+      } else {
+        // No config found, pre-fill with user info if available
+        if (user) {
+          setGitConfig({
+            userName: user.username || '',
+            userEmail: user.email || ''
+          });
+        }
+        setShowGitConfigModal(true);
+        return false;
+      }
+    } catch (error) {
+      console.error('Error checking git config:', error);
+      return false;
+    } finally {
+      setIsCheckingConfig(false);
+    }
+  };
+
+  const saveGitConfig = async () => {
+    if (!selectedProject || !gitConfig.userName || !gitConfig.userEmail) return;
+    
+    setIsSavingConfig(true);
+    try {
+      const response = await authenticatedFetch('/api/git/set-config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project: selectedProject.name,
+          userName: gitConfig.userName,
+          userEmail: gitConfig.userEmail,
+          scope: configScope
+        })
+      });
+      
+      const data = await response.json();
+      if (data.success) {
+        setShowGitConfigModal(false);
+        // Retry the original commit if there's a pending commit
+        if (commitMessage.trim() && selectedFiles.size > 0) {
+          handleCommit();
+        }
+      } else {
+        console.error('Failed to save git config:', data.error);
+        setConfirmAction({
+          type: 'error',
+          title: 'Configuration Failed',
+          message: data.error || 'Failed to save Git configuration.'
+        });
+      }
+    } catch (error) {
+      console.error('Error saving git config:', error);
+      setConfirmAction({
+        type: 'error',
+        title: 'Configuration Failed',
+        message: 'An error occurred while saving Git configuration.'
+      });
+    } finally {
+      setIsSavingConfig(false);
+    }
+  };
+
   const switchBranch = async (branchName) => {
     try {
       const response = await authenticatedFetch('/api/git/checkout', {
@@ -191,6 +300,120 @@ function GitPanel({ selectedProject, isMobile }) {
       console.error('Error creating branch:', error);
     } finally {
       setIsCreatingBranch(false);
+    }
+  };
+
+  const createTag = async () => {
+    if (!newTagName.trim()) return;
+    
+    setIsCreatingTag(true);
+    try {
+      const response = await authenticatedFetch('/api/git/create-tag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project: selectedProject.name,
+          tagName: newTagName.trim(),
+          message: newTagMessage.trim() || undefined,
+          commitHash: selectedCommitForTag || undefined
+        })
+      });
+      
+      const data = await response.json();
+      if (data.success) {
+        setShowCreateTagModal(false);
+        setNewTagName('');
+        setNewTagMessage('');
+        setSelectedCommitForTag(null);
+        fetchTags(); // Refresh tag list
+      } else {
+        console.error('Failed to create tag:', data.error);
+        // Show error message
+        setConfirmAction({
+          type: 'error',
+          title: data.error || 'Tag Creation Failed',
+          message: data.details || 'An error occurred while creating the tag.'
+        });
+      }
+    } catch (error) {
+      console.error('Error creating tag:', error);
+      setConfirmAction({
+        type: 'error',
+        title: 'Tag Creation Failed',
+        message: 'An error occurred while creating the tag.'
+      });
+    } finally {
+      setIsCreatingTag(false);
+    }
+  };
+
+  const deleteTag = async (tagName) => {
+    try {
+      const response = await authenticatedFetch('/api/git/delete-tag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project: selectedProject.name,
+          tagName: tagName
+        })
+      });
+      
+      const data = await response.json();
+      if (data.success) {
+        fetchTags(); // Refresh tag list
+      } else {
+        console.error('Failed to delete tag:', data.error);
+        setConfirmAction({
+          type: 'error',
+          title: data.error || 'Tag Deletion Failed',
+          message: data.details || 'An error occurred while deleting the tag.'
+        });
+      }
+    } catch (error) {
+      console.error('Error deleting tag:', error);
+      setConfirmAction({
+        type: 'error',
+        title: 'Tag Deletion Failed',
+        message: 'An error occurred while deleting the tag.'
+      });
+    }
+  };
+
+  const checkoutTag = async (tagName) => {
+    try {
+      const response = await authenticatedFetch('/api/git/checkout-tag', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          project: selectedProject.name,
+          tagName: tagName
+        })
+      });
+      
+      const data = await response.json();
+      if (data.success) {
+        fetchGitStatus(); // Refresh status
+        fetchBranches(); // Refresh branches
+        setConfirmAction({
+          type: 'info',
+          title: 'Tag Checked Out',
+          message: `Successfully checked out tag "${tagName}". Note: You are now in a detached HEAD state.`
+        });
+      } else {
+        console.error('Failed to checkout tag:', data.error);
+        setConfirmAction({
+          type: 'error',
+          title: data.error || 'Tag Checkout Failed',
+          message: data.details || 'An error occurred while checking out the tag.'
+        });
+      }
+    } catch (error) {
+      console.error('Error checking out tag:', error);
+      setConfirmAction({
+        type: 'error', 
+        title: 'Tag Checkout Failed',
+        message: 'An error occurred while checking out the tag.'
+      });
     }
   };
 
@@ -561,6 +784,13 @@ function GitPanel({ selectedProject, isMobile }) {
   const handleCommit = async () => {
     if (!commitMessage.trim() || selectedFiles.size === 0) return;
     
+    // Check git config before committing
+    const hasConfig = await checkGitConfig();
+    if (!hasConfig) {
+      // Config modal will be shown, wait for user to configure
+      return;
+    }
+    
     setIsCommitting(true);
     try {
       const response = await authenticatedFetch('/api/git/commit', {
@@ -582,9 +812,24 @@ function GitPanel({ selectedProject, isMobile }) {
         fetchRemoteStatus();
       } else {
         console.error('Commit failed:', data.error);
+        // Check if it's an identity error
+        if (data.error && data.error.includes('Please tell me who you are')) {
+          setShowGitConfigModal(true);
+        } else {
+          setConfirmAction({
+            type: 'error',
+            title: 'Commit Failed',
+            message: data.error || 'An error occurred while committing changes.'
+          });
+        }
       }
     } catch (error) {
       console.error('Error committing changes:', error);
+      setConfirmAction({
+        type: 'error',
+        title: 'Commit Failed',
+        message: 'An error occurred while committing changes.'
+      });
     } finally {
       setIsCommitting(false);
     }
@@ -628,16 +873,19 @@ function GitPanel({ selectedProject, isMobile }) {
     
     return (
       <div key={commit.hash} className="border-b border-gray-200 dark:border-gray-700 last:border-0">
-        <div 
-          className="flex items-start p-3 hover:bg-gray-50 dark:hover:bg-gray-800 cursor-pointer"
-          onClick={() => toggleCommitExpanded(commit.hash)}
-        >
-          <div className="mr-2 mt-1 p-0.5 hover:bg-gray-200 dark:hover:bg-gray-700 rounded">
+        <div className="flex items-start p-3 hover:bg-gray-50 dark:hover:bg-gray-800">
+          <div 
+            className="mr-2 mt-1 p-0.5 hover:bg-gray-200 dark:hover:bg-gray-700 rounded cursor-pointer"
+            onClick={() => toggleCommitExpanded(commit.hash)}
+          >
             {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-start justify-between gap-2">
-              <div className="flex-1 min-w-0">
+              <div 
+                className="flex-1 min-w-0 cursor-pointer" 
+                onClick={() => toggleCommitExpanded(commit.hash)}
+              >
                 <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
                   {commit.message}
                 </p>
@@ -645,9 +893,22 @@ function GitPanel({ selectedProject, isMobile }) {
                   {commit.author} • {commit.date}
                 </p>
               </div>
-              <span className="text-xs font-mono text-gray-400 dark:text-gray-500 flex-shrink-0">
-                {commit.hash.substring(0, 7)}
-              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedCommitForTag(commit.hash);
+                    setShowCreateTagModal(true);
+                  }}
+                  className="p-1 text-green-600 dark:text-green-400 hover:bg-green-100 dark:hover:bg-green-900 rounded"
+                  title="Create tag from this commit"
+                >
+                  <Tag className="w-3 h-3" />
+                </button>
+                <span className="text-xs font-mono text-gray-400 dark:text-gray-500 flex-shrink-0">
+                  {commit.hash.substring(0, 7)}
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -1027,6 +1288,19 @@ function GitPanel({ selectedProject, isMobile }) {
                 <span>History</span>
               </div>
             </button>
+            <button
+              onClick={() => setActiveView('tags')}
+              className={`flex-1 px-4 py-2 text-sm font-medium transition-colors ${
+                activeView === 'tags'
+                  ? 'text-blue-600 dark:text-blue-400 border-b-2 border-blue-600 dark:border-blue-400'
+                  : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+              }`}
+            >
+              <div className="flex items-center justify-center gap-2">
+                <Tag className="w-4 h-4" />
+                <span>Tags</span>
+              </div>
+            </button>
           </div>
 
           {/* Changes View */}
@@ -1251,6 +1525,105 @@ function GitPanel({ selectedProject, isMobile }) {
         </div>
       )}
 
+      {/* Tags View - Only show when git is available */}
+      {activeView === 'tags' && !gitStatus?.error && (
+        <>
+          {/* Create Tag Button */}
+          <div className="border-b border-gray-200 dark:border-gray-700 p-3">
+            <button
+              onClick={() => setShowCreateTagModal(true)}
+              className="w-full flex items-center justify-center gap-2 px-3 py-2 text-sm bg-green-600 text-white rounded-md hover:bg-green-700"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Create Tag</span>
+            </button>
+          </div>
+
+          {/* Tags List */}
+          <div className={`flex-1 overflow-y-auto ${isMobile ? 'pb-20' : ''}`}>
+            {isLoading ? (
+              <div className="flex items-center justify-center h-32">
+                <RefreshCw className="w-6 h-6 animate-spin text-gray-400" />
+              </div>
+            ) : tags.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-32 text-gray-500 dark:text-gray-400">
+                <Tag className="w-12 h-12 mb-2 opacity-50" />
+                <p className="text-sm">No tags found</p>
+                <p className="text-xs mt-1">Create your first tag to mark releases</p>
+              </div>
+            ) : (
+              <div className={isMobile ? 'pb-4' : ''}>
+                {tags.map(tag => (
+                  <div key={tag.name} className="border-b border-gray-200 dark:border-gray-700 last:border-0">
+                    <div className="flex items-center justify-between p-3 hover:bg-gray-50 dark:hover:bg-gray-800">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <Tag className="w-4 h-4 text-green-600 dark:text-green-400" />
+                          <span className="font-semibold text-gray-900 dark:text-white">{tag.name}</span>
+                          <span className="text-xs font-mono text-gray-400 dark:text-gray-500">
+                            {tag.hash ? tag.hash.substring(0, 7) : ''}
+                          </span>
+                        </div>
+                        {tag.message && (
+                          <p className="text-sm text-gray-600 dark:text-gray-400 mb-1">{tag.message}</p>
+                        )}
+                        {tag.author && (
+                          <p className="text-xs text-gray-500 dark:text-gray-400">
+                            {tag.author} • {tag.date}
+                          </p>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => setConfirmAction({
+                            type: 'info',
+                            title: 'Checkout Tag',
+                            message: `Checkout tag "${tag.name}"? This will put your repository in a detached HEAD state.`,
+                            actions: [
+                              {
+                                label: 'Checkout',
+                                action: () => {
+                                  checkoutTag(tag.name);
+                                  setConfirmAction(null);
+                                }
+                              }
+                            ]
+                          })}
+                          className="p-1.5 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-900 rounded"
+                          title="Checkout tag"
+                        >
+                          <GitBranch className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => setConfirmAction({
+                            type: 'delete',
+                            title: 'Delete Tag',
+                            message: `Delete tag "${tag.name}"? This action cannot be undone.`,
+                            actions: [
+                              {
+                                label: 'Delete',
+                                action: () => {
+                                  deleteTag(tag.name);
+                                  setConfirmAction(null);
+                                }
+                              }
+                            ]
+                          })}
+                          className="p-1.5 text-red-600 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900 rounded"
+                          title="Delete tag"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
       {/* New Branch Modal */}
       {showNewBranchModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -1303,6 +1676,84 @@ function GitPanel({ selectedProject, isMobile }) {
                     <>
                       <Plus className="w-3 h-3" />
                       <span>Create Branch</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Create Tag Modal */}
+      {showCreateTagModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black bg-opacity-50" onClick={() => setShowCreateTagModal(false)} />
+          <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full">
+            <div className="p-6">
+              <h3 className="text-lg font-semibold mb-4">Create New Tag</h3>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Tag Name *
+                </label>
+                <input
+                  type="text"
+                  value={newTagName}
+                  onChange={(e) => setNewTagName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !isCreatingTag && newTagName.trim()) {
+                      createTag();
+                    }
+                  }}
+                  placeholder="v1.0.0"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  autoFocus
+                />
+              </div>
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Tag Message (optional)
+                </label>
+                <textarea
+                  value={newTagMessage}
+                  onChange={(e) => setNewTagMessage(e.target.value)}
+                  placeholder="Release notes or description..."
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+                  rows="3"
+                />
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                {selectedCommitForTag 
+                  ? `Tag will be created on commit: ${selectedCommitForTag.substring(0, 7)}`
+                  : `Tag will be created on current HEAD (${currentBranch})`
+                }
+              </div>
+              <div className="flex justify-end space-x-3">
+                <button
+                  onClick={() => {
+                    setShowCreateTagModal(false);
+                    setNewTagName('');
+                    setNewTagMessage('');
+                    setSelectedCommitForTag(null);
+                  }}
+                  className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={createTag}
+                  disabled={!newTagName.trim() || isCreatingTag}
+                  className="px-4 py-2 text-sm bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                >
+                  {isCreatingTag ? (
+                    <>
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                      <span>Creating...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Tag className="w-3 h-3" />
+                      <span>Create Tag</span>
                     </>
                   )}
                 </button>
@@ -1427,6 +1878,105 @@ function GitPanel({ selectedProject, isMobile }) {
                     )}
                   </>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Git Configuration Modal */}
+      {showGitConfigModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="fixed inset-0 bg-black bg-opacity-50" onClick={() => setShowGitConfigModal(false)} />
+          <div className="relative bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-md w-full">
+            <div className="p-6">
+              <h3 className="text-lg font-semibold mb-4">Git Configuration Required</h3>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-6">
+                Git needs your name and email to identify you as the author of commits.
+              </p>
+              
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Your Name *
+                </label>
+                <input
+                  type="text"
+                  value={gitConfig.userName}
+                  onChange={(e) => setGitConfig(prev => ({ ...prev, userName: e.target.value }))}
+                  placeholder="John Doe"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  autoFocus
+                />
+              </div>
+              
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Email Address *
+                </label>
+                <input
+                  type="email"
+                  value={gitConfig.userEmail}
+                  onChange={(e) => setGitConfig(prev => ({ ...prev, userEmail: e.target.value }))}
+                  placeholder="john.doe@example.com"
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              
+              <div className="mb-6">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Configuration Scope
+                </label>
+                <div className="flex gap-4">
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      value="local"
+                      checked={configScope === 'local'}
+                      onChange={(e) => setConfigScope(e.target.value)}
+                      className="mr-2"
+                    />
+                    <span className="text-sm">Local (this project only)</span>
+                  </label>
+                  <label className="flex items-center">
+                    <input
+                      type="radio"
+                      value="global"
+                      checked={configScope === 'global'}
+                      onChange={(e) => setConfigScope(e.target.value)}
+                      className="mr-2"
+                    />
+                    <span className="text-sm">Global (all projects)</span>
+                  </label>
+                </div>
+              </div>
+              
+              <div className="flex justify-end space-x-3">
+                <button
+                  onClick={() => {
+                    setShowGitConfigModal(false);
+                    setGitConfig({ userName: '', userEmail: '' });
+                  }}
+                  className="px-4 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-md"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveGitConfig}
+                  disabled={!gitConfig.userName.trim() || !gitConfig.userEmail.trim() || isSavingConfig}
+                  className="px-4 py-2 text-sm bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center space-x-2"
+                >
+                  {isSavingConfig ? (
+                    <>
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3 h-3" />
+                      <span>Save Configuration</span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           </div>

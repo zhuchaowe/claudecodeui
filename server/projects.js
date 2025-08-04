@@ -475,6 +475,17 @@ async function getSessions(username, projectName, limit = 5, offset = 0) {
   console.log(`[DEBUG] getSessions: Looking for sessions in ${projectDir}`);
   
   try {
+    // Check if directory exists before trying to read it
+    try {
+      await fs.access(projectDir);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        console.log(`[DEBUG] getSessions: Directory does not exist: ${projectDir}`);
+        return { sessions: [], hasMore: false, total: 0 };
+      }
+      throw error;
+    }
+    
     const files = await fs.readdir(projectDir);
     const jsonlFiles = files.filter(file => file.endsWith('.jsonl'));
     console.log(`[DEBUG] getSessions: Found ${jsonlFiles.length} JSONL files`);
