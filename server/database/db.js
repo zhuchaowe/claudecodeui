@@ -60,9 +60,9 @@ const runMigrations = () => {
       db.exec('ALTER TABLE users ADD COLUMN gitea_username TEXT');
     }
     
-    if (!columnExists('users', 'proxy_config')) {
-      console.log('Adding proxy_config column to users table...');
-      db.exec('ALTER TABLE users ADD COLUMN proxy_config TEXT');
+    if (!columnExists('users', 'anthropic_config')) {
+      console.log('Adding anthropic_config column to users table...');
+      db.exec('ALTER TABLE users ADD COLUMN anthropic_config TEXT');
     }
     
     // Check if project_access table exists, create it if not

@@ -255,29 +255,37 @@ async function spawnClaude(command, options = {}, ws) {
     console.log('🔍 Full command args:', JSON.stringify(args, null, 2));
     console.log('🔍 Final CLI command will be: ' + cliCommand + ' ' + args.join(' '));
     
-    // Get user's proxy configuration from database
-    let userProxyEnv = {};
+    // Get user's anthropic configuration from database
+    let userAnthropicEnv = {};
     if (username) {
       try {
-        const userQuery = projectDb.prepare('SELECT proxy_config FROM users WHERE username = ?').get(username);
-        if (userQuery && userQuery.proxy_config) {
-          const proxyConfig = JSON.parse(userQuery.proxy_config);
-          if (proxyConfig.enabled && proxyConfig.openaiApiKey) {
-            // Set proxy environment variables for this session
-            userProxyEnv = {
-              OPENAI_API_KEY: proxyConfig.openaiApiKey,
-              OPENAI_BASE_URL: proxyConfig.openaiBaseUrl || 'https://api.openai.com/v1',
-              BIG_MODEL: proxyConfig.bigModel || 'gpt-4',
-              SMALL_MODEL: proxyConfig.smallModel || 'gpt-3.5-turbo',
-              // When proxy is enabled, override Anthropic base URL
-              ANTHROPIC_BASE_URL: 'http://localhost:8082',
-              ANTHROPIC_AUTH_TOKEN: process.env.ANTHROPIC_AUTH_TOKEN || 'proxy-key'
-            };
-            console.log('🔑 Using user proxy configuration for', username);
+        const userQuery = projectDb.prepare('SELECT anthropic_config FROM users WHERE username = ?').get(username);
+        if (userQuery && userQuery.anthropic_config) {
+          const anthropicConfig = JSON.parse(userQuery.anthropic_config);
+          if (anthropicConfig.enabled) {
+            // Only override environment variables that user has explicitly set
+            userAnthropicEnv = {};
+            
+            // Only set if user provided a value
+            if (anthropicConfig.anthropicBaseUrl && anthropicConfig.anthropicBaseUrl.trim()) {
+              userAnthropicEnv.ANTHROPIC_BASE_URL = anthropicConfig.anthropicBaseUrl;
+            }
+            
+            if (anthropicConfig.anthropicAuthToken && anthropicConfig.anthropicAuthToken.trim()) {
+              userAnthropicEnv.ANTHROPIC_AUTH_TOKEN = anthropicConfig.anthropicAuthToken;
+            }
+            
+            if (anthropicConfig.anthropicApiKey && anthropicConfig.anthropicApiKey.trim()) {
+              userAnthropicEnv.ANTHROPIC_API_KEY = anthropicConfig.anthropicApiKey;
+            }
+            
+            if (Object.keys(userAnthropicEnv).length > 0) {
+              console.log('🔑 Using user Anthropic configuration for', username, 'with', Object.keys(userAnthropicEnv).join(', '));
+            }
           }
         }
       } catch (error) {
-        console.error('Error loading user proxy config:', error);
+        console.error('Error loading user anthropic config:', error);
       }
     }
     
@@ -286,7 +294,7 @@ async function spawnClaude(command, options = {}, ws) {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { 
         ...process.env,
-        ...userProxyEnv // Override with user's proxy settings if configured
+        ...userAnthropicEnv // Override with user's anthropic settings if configured
       }
     };
     

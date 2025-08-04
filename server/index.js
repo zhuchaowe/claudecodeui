@@ -252,133 +252,141 @@ console.log('Gitea routes configured. GITEA_CLIENT_ID:', process.env.GITEA_CLIEN
 // Email API Routes (protected)
 app.use('/api/email', emailRoutes);
 
-// Proxy Configuration API Routes (protected)
-app.get('/api/proxy-config', authenticateToken, async (req, res) => {
+// Anthropic Configuration API Routes (protected)
+app.get('/api/anthropic-config', authenticateToken, async (req, res) => {
   try {
-    // Get user's proxy configuration from database
-    const user = projectDb.prepare('SELECT proxy_config FROM users WHERE id = ?').get(req.user.id);
+    // Get user's anthropic configuration from database
+    const user = projectDb.prepare('SELECT anthropic_config FROM users WHERE id = ?').get(req.user.id);
     
-    if (!user || !user.proxy_config) {
+    if (!user || !user.anthropic_config) {
       // Return default config if not set
       return res.json({
         enabled: false,
-        openaiApiKey: '',
-        openaiBaseUrl: '',
-        bigModel: '',
-        smallModel: ''
+        anthropicBaseUrl: '',
+        anthropicAuthToken: '',
+        anthropicApiKey: ''
       });
     }
     
-    const config = JSON.parse(user.proxy_config);
+    const config = JSON.parse(user.anthropic_config);
     
-    // Mask API key for security
-    if (config.openaiApiKey) {
-      config.openaiApiKey = '***' + config.openaiApiKey.slice(-4);
+    // Mask API keys for security
+    if (config.anthropicAuthToken) {
+      config.anthropicAuthToken = '***' + config.anthropicAuthToken.slice(-4);
+    }
+    if (config.anthropicApiKey) {
+      config.anthropicApiKey = '***' + config.anthropicApiKey.slice(-4);
     }
     
     res.json(config);
   } catch (error) {
-    console.error('Error getting proxy config:', error);
-    res.status(500).json({ error: 'Failed to get proxy configuration' });
+    console.error('Error getting anthropic config:', error);
+    res.status(500).json({ error: 'Failed to get anthropic configuration' });
   }
 });
 
-app.post('/api/proxy-config', authenticateToken, async (req, res) => {
+app.post('/api/anthropic-config', authenticateToken, async (req, res) => {
   try {
-    const { openaiApiKey, openaiBaseUrl, bigModel, smallModel } = req.body;
+    const { anthropicBaseUrl, anthropicAuthToken, anthropicApiKey } = req.body;
     
     // Validate required fields
-    if (!openaiApiKey) {
-      return res.status(400).json({ error: 'API key is required' });
+    if (!anthropicAuthToken && !anthropicApiKey) {
+      return res.status(400).json({ error: 'At least one authentication method (auth token or API key) is required' });
     }
     
-    // Create proxy config object
-    const proxyConfig = {
+    // Create anthropic config object
+    const anthropicConfig = {
       enabled: true,
-      openaiApiKey: openaiApiKey,
-      openaiBaseUrl: openaiBaseUrl || 'https://api.openai.com/v1',
-      bigModel: bigModel || 'gpt-4',
-      smallModel: smallModel || 'gpt-3.5-turbo'
+      anthropicBaseUrl: anthropicBaseUrl || '',
+      anthropicAuthToken: anthropicAuthToken || '',
+      anthropicApiKey: anthropicApiKey || ''
     };
     
     // Save to database
-    projectDb.prepare('UPDATE users SET proxy_config = ? WHERE id = ?')
-      .run(JSON.stringify(proxyConfig), req.user.id);
+    projectDb.prepare('UPDATE users SET anthropic_config = ? WHERE id = ?')
+      .run(JSON.stringify(anthropicConfig), req.user.id);
     
     // Return masked config
     res.json({ 
       success: true, 
-      message: 'Proxy configuration saved successfully',
+      message: 'Anthropic configuration saved successfully',
       config: {
         enabled: true,
-        openaiApiKey: '***' + openaiApiKey.slice(-4),
-        openaiBaseUrl: proxyConfig.openaiBaseUrl,
-        bigModel: proxyConfig.bigModel,
-        smallModel: proxyConfig.smallModel
+        anthropicBaseUrl: anthropicConfig.anthropicBaseUrl,
+        anthropicAuthToken: anthropicConfig.anthropicAuthToken ? '***' + anthropicConfig.anthropicAuthToken.slice(-4) : '',
+        anthropicApiKey: anthropicConfig.anthropicApiKey ? '***' + anthropicConfig.anthropicApiKey.slice(-4) : ''
       }
     });
   } catch (error) {
-    console.error('Error saving proxy config:', error);
-    res.status(500).json({ error: 'Failed to save proxy configuration' });
+    console.error('Error saving anthropic config:', error);
+    res.status(500).json({ error: 'Failed to save anthropic configuration' });
   }
 });
 
-app.delete('/api/proxy-config', authenticateToken, async (req, res) => {
+app.delete('/api/anthropic-config', authenticateToken, async (req, res) => {
   try {
-    // Clear user's proxy configuration
+    // Clear user's anthropic configuration
     const disabledConfig = {
       enabled: false,
-      openaiApiKey: '',
-      openaiBaseUrl: '',
-      bigModel: '',
-      smallModel: ''
+      anthropicBaseUrl: '',
+      anthropicAuthToken: '',
+      anthropicApiKey: ''
     };
     
-    projectDb.prepare('UPDATE users SET proxy_config = ? WHERE id = ?')
+    projectDb.prepare('UPDATE users SET anthropic_config = ? WHERE id = ?')
       .run(JSON.stringify(disabledConfig), req.user.id);
     
     res.json({ 
       success: true, 
-      message: 'Proxy configuration disabled successfully' 
+      message: 'Anthropic configuration disabled successfully' 
     });
   } catch (error) {
-    console.error('Error disabling proxy config:', error);
-    res.status(500).json({ error: 'Failed to disable proxy configuration' });
+    console.error('Error disabling anthropic config:', error);
+    res.status(500).json({ error: 'Failed to disable anthropic configuration' });
   }
 });
 
-// Test proxy connection endpoint
-app.post('/api/proxy-config/test', authenticateToken, async (req, res) => {
+// Test anthropic connection endpoint
+app.post('/api/anthropic-config/test', authenticateToken, async (req, res) => {
   try {
-    const { openaiApiKey, openaiBaseUrl, bigModel } = req.body;
+    const { anthropicBaseUrl, anthropicAuthToken, anthropicApiKey } = req.body;
     
-    if (!openaiApiKey || !openaiBaseUrl) {
-      return res.status(400).json({ error: 'API key and base URL are required for testing' });
+    if ((!anthropicAuthToken && !anthropicApiKey)) {
+      return res.status(400).json({ error: 'At least one authentication method is required for testing' });
     }
     
-    // Try to make a simple API call to test the connection
-    const testUrl = openaiBaseUrl.replace(/\/$/, '') + '/models';
+    // Use provided base URL or default Anthropic API
+    const baseUrl = anthropicBaseUrl || 'https://api.anthropic.com';
+    const testUrl = baseUrl.replace(/\/$/, '') + '/v1/messages';
     
+    // Prepare headers based on available auth method
+    const headers = {
+      'Content-Type': 'application/json',
+      'anthropic-version': '2023-06-01'
+    };
+    
+    if (anthropicApiKey) {
+      headers['x-api-key'] = anthropicApiKey;
+    } else if (anthropicAuthToken) {
+      headers['Authorization'] = `Bearer ${anthropicAuthToken}`;
+    }
+    
+    // Simple test request
     const response = await fetch(testUrl, {
-      headers: {
-        'Authorization': `Bearer ${openaiApiKey}`,
-        'Content-Type': 'application/json'
-      }
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: 'claude-3-opus-20240229',
+        max_tokens: 10,
+        messages: [{ role: 'user', content: 'Hi' }]
+      })
     });
     
-    if (response.ok) {
-      const data = await response.json();
-      // Check if the specified model exists
-      let modelExists = false;
-      if (data.data && Array.isArray(data.data)) {
-        modelExists = data.data.some(model => model.id === bigModel);
-      }
-      
+    if (response.ok || response.status === 400) { // 400 might mean auth works but request format issue
       res.json({ 
         success: true, 
         message: 'Connection successful',
-        modelExists,
-        availableModels: data.data ? data.data.map(m => m.id) : []
+        status: response.status
       });
     } else {
       const errorText = await response.text();
@@ -389,7 +397,7 @@ app.post('/api/proxy-config/test', authenticateToken, async (req, res) => {
       });
     }
   } catch (error) {
-    console.error('Error testing proxy connection:', error);
+    console.error('Error testing anthropic connection:', error);
     res.json({ 
       success: false, 
       message: 'Connection test failed',
