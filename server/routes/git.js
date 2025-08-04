@@ -649,7 +649,7 @@ router.post('/fetch', async (req, res) => {
 
 // Pull from remote (fetch + merge using smart remote detection)
 router.post('/pull', async (req, res) => {
-  const { project } = req.body;
+  const { project, credentials } = req.body;
   
   if (!project) {
     return res.status(400).json({ error: 'Project name is required' });
@@ -675,13 +675,103 @@ router.post('/pull', async (req, res) => {
       console.log('No upstream configured, using origin/branch as fallback');
     }
 
+    // Check if we should setup credential helper store
+    let setupCredentialHelper = false;
+    let autoCredentials = null;
+    
+    // Get remote URL to determine if we need credentials
+    let remoteUrl = '';
+    try {
+      const { stdout: urlOutput } = await execAsync(`git remote get-url ${remoteName}`, { cwd: projectPath });
+      remoteUrl = urlOutput.trim();
+    } catch (error) {
+      console.error('Failed to get remote URL:', error);
+    }
+
+    // Check if we should try to use GitHub OAuth token
+    if (!credentials && req.user?.id && remoteUrl.includes('github.com')) {
+      try {
+        const user = await getUserById(req.user.id);
+        if (user.github_token && user.github_username) {
+          // Extract repository owner from remote URL
+          let repoOwner = null;
+          
+          if (remoteUrl.includes('github.com/')) {
+            const match = remoteUrl.match(/github\.com\/([^\/]+)\//);
+            if (match) repoOwner = match[1];
+          } else if (remoteUrl.includes('git@github.com:')) {
+            const match = remoteUrl.match(/git@github\.com:([^\/]+)\//);
+            if (match) repoOwner = match[1];
+          }
+          
+          if (repoOwner && repoOwner.toLowerCase() === user.github_username.toLowerCase()) {
+            autoCredentials = {
+              username: user.github_username,
+              token: user.github_token
+            };
+            setupCredentialHelper = true;
+          }
+        }
+      } catch (error) {
+        console.error('Error checking GitHub OAuth token:', error);
+      }
+    }
+
+    // Use provided credentials or auto credentials for setup
+    const finalCredentials = credentials || autoCredentials;
+    
+    if (finalCredentials && setupCredentialHelper && remoteUrl.includes('https://')) {
+      console.log('Setting up git credential helper store for future operations...');
+      
+      try {
+        // Set up credential helper store
+        await execAsync('git config credential.helper store', { cwd: projectPath });
+        
+        // Create credentials for the specific URL
+        const homeDir = process.env.HOME || process.env.USERPROFILE;
+        const credentialsFile = path.join(homeDir, '.git-credentials');
+        
+        // Parse the URL to create credential entry
+        const urlParts = remoteUrl.match(/https:\/\/(.+)/);
+        if (urlParts) {
+          const credentialEntry = `https://${finalCredentials.username}:${finalCredentials.token}@${urlParts[1]}\n`;
+          
+          // Append to git-credentials file (create if doesn't exist)
+          try {
+            // Read existing credentials to avoid duplicates
+            let existingCredentials = '';
+            try {
+              existingCredentials = await fs.readFile(credentialsFile, 'utf-8');
+            } catch (error) {
+              // File doesn't exist, that's fine
+            }
+            
+            // Check if credential already exists
+            if (!existingCredentials.includes(urlParts[1])) {
+              await fs.appendFile(credentialsFile, credentialEntry, { mode: 0o600 });
+              console.log('Credentials stored in git credential helper');
+            } else {
+              console.log('Credentials already exist in git credential helper');
+            }
+          } catch (error) {
+            console.error('Failed to store credentials:', error);
+            // Continue without storing, pull might still work
+          }
+        }
+      } catch (error) {
+        console.error('Failed to setup credential helper:', error);
+        // Continue without credential helper
+      }
+    }
+
     const { stdout } = await execAsync(`git pull ${remoteName} ${remoteBranch}`, { cwd: projectPath });
     
     res.json({ 
       success: true, 
       output: stdout || 'Pull completed successfully', 
       remoteName,
-      remoteBranch
+      remoteBranch,
+      credentialHelperConfigured: setupCredentialHelper
     });
   } catch (error) {
     console.error('Git pull error:', error);
@@ -705,6 +795,30 @@ router.post('/pull', async (req, res) => {
     } else if (error.message.includes('diverged')) {
       errorMessage = 'Branches have diverged';
       details = 'Your local branch and remote branch have diverged. Consider fetching first to review changes.';
+    } else if (error.message.includes('Authentication failed') || 
+               error.message.includes('could not read Username') ||
+               error.message.includes('could not read Password')) {
+      errorMessage = 'Authentication required';
+      details = 'Authentication is required to pull from this repository.';
+      
+      // Try to determine the remote type
+      let remoteType = 'generic';
+      if (remoteUrl.includes('github.com')) {
+        remoteType = 'github';
+        details = 'GitHub requires authentication. Please provide your credentials.';
+      } else if (remoteUrl.includes('gitlab.com')) {
+        remoteType = 'gitlab';
+      } else if (remoteUrl.includes('bitbucket.org')) {
+        remoteType = 'bitbucket';
+      }
+      
+      res.status(401).json({ 
+        error: errorMessage, 
+        details: details,
+        requiresAuth: true,
+        remoteType: remoteType
+      });
+      return;
     }
     
     res.status(500).json({ 
@@ -754,18 +868,11 @@ router.post('/push', async (req, res) => {
     // Check if we should try to use GitHub OAuth token
     let autoCredentials = null;
     console.log('Checking for auto OAuth credentials...');
-    console.log('Has credentials:', !!credentials);
-    console.log('User ID:', req.user?.id);
-    console.log('Remote URL:', remoteUrl);
-    console.log('Is GitHub:', remoteUrl.includes('github.com'));
     
     if (!credentials && req.user?.id && remoteUrl.includes('github.com')) {
       try {
         // Get user's GitHub token from database
         const user = await getUserById(req.user.id);
-        console.log('User found:', !!user);
-        console.log('Has GitHub token:', !!user?.github_token);
-        console.log('GitHub username:', user?.github_username);
         
         if (user.github_token && user.github_username) {
           // Extract repository owner from remote URL
@@ -782,8 +889,6 @@ router.post('/push', async (req, res) => {
             if (match) repoOwner = match[1];
           }
           
-          console.log('Repository owner:', repoOwner, 'User GitHub username:', user.github_username);
-          
           // Check if the repository belongs to the authenticated user
           if (repoOwner && repoOwner.toLowerCase() === user.github_username.toLowerCase()) {
             console.log('Repository belongs to authenticated user, using OAuth token');
@@ -791,256 +896,85 @@ router.post('/push', async (req, res) => {
               username: user.github_username,
               token: user.github_token
             };
-          } else {
-            console.log('Repository does not belong to user, skipping auto auth');
           }
-        } else {
-          console.log('User does not have GitHub OAuth configured');
         }
       } catch (error) {
         console.error('Error checking GitHub OAuth token:', error);
-        // Continue without auto credentials
       }
-    } else {
-      console.log('Skipping auto OAuth check:', {
-        hasCredentials: !!credentials,
-        hasUser: !!req.user?.id,
-        isGitHub: remoteUrl.includes('github.com')
-      });
     }
 
-    // Prepare environment for git command with credentials if provided
-    let env = { ...process.env };
-    
     // Use provided credentials or auto credentials
     const finalCredentials = credentials || autoCredentials;
     
-    console.log('Final credentials:', finalCredentials ? {
-      hasUsername: !!finalCredentials.username,
-      hasToken: !!finalCredentials.token,
-      hasPassword: !!finalCredentials.password
-    } : 'none');
-    
-    if (finalCredentials && (finalCredentials.username || finalCredentials.token)) {
-      console.log('Using credentials for push...');
-      // Create a unique session ID for this push operation
-      const sessionId = `push_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-      const credentialCacheDir = path.join(__dirname, '../.git-credentials-cache');
-      const credentialFile = path.join(credentialCacheDir, `${sessionId}.json`);
-      
-      // Ensure cache directory exists
-      await fs.mkdir(credentialCacheDir, { recursive: true, mode: 0o700 });
-      
-      // Write credentials to temporary file
-      const credentialData = {
-        username: finalCredentials.username || '',
-        password: finalCredentials.token || finalCredentials.password || '',
-        token: finalCredentials.token || '',
-        timestamp: Date.now()
-      };
-      
-      await fs.writeFile(credentialFile, JSON.stringify(credentialData), { mode: 0o600 });
-      
-      // Set environment variables for git askpass
-      env.GIT_ASKPASS = path.join(__dirname, '../git-askpass-helper.cjs');
-      env.GIT_CREDENTIAL_SESSION_ID = sessionId;
-      
-      // Clean up function
-      const cleanup = async () => {
-        try {
-          await fs.unlink(credentialFile);
-          
-          // Also clean up old credential files (older than 1 hour)
-          const files = await fs.readdir(credentialCacheDir);
-          const now = Date.now();
-          for (const file of files) {
-            if (file.endsWith('.json')) {
-              const filePath = path.join(credentialCacheDir, file);
-              try {
-                const stats = await fs.stat(filePath);
-                if (now - stats.mtimeMs > 3600000) { // 1 hour
-                  await fs.unlink(filePath);
-                }
-              } catch (error) {
-                // Ignore errors for individual file cleanup
-              }
-            }
-          }
-        } catch (error) {
-          // Ignore cleanup errors
-        }
-      };
-      
-      // Set a timeout to clean up after 5 seconds
-      setTimeout(cleanup, 5000);
-      
-      const cleanupGitConfig = async () => {
-        try {
-          // Reset git config
-          await execAsync(`git config --unset credential.https://github.com.username`, { cwd: projectPath }).catch(() => {});
-          await execAsync(`git config --unset credential.helper`, { cwd: projectPath }).catch(() => {});
-        } catch (e) {
-          // Ignore cleanup errors
-        }
-      };
+    // If we have credentials and it's an HTTPS repository, set up credential helper
+    if (finalCredentials && remoteUrl.includes('https://')) {
+      console.log('Setting up credentials for push...');
       
       try {
-        // For HTTPS URLs with GitHub, we need to temporarily set the remote URL with credentials
-        let pushCommand = `git push ${remoteName} ${remoteBranch}`;
+        // Set up credential helper store temporarily
+        await execAsync('git config credential.helper store', { cwd: projectPath });
         
-        if (remoteUrl.includes('https://') && finalCredentials.token) {
-          // Try a different approach - set git config temporarily
-          console.log('Using git config approach for authentication...');
+        // Create credentials for the specific URL
+        const homeDir = process.env.HOME || process.env.USERPROFILE;
+        const credentialsFile = path.join(homeDir, '.git-credentials');
+        
+        // Parse the URL to create credential entry
+        const urlParts = remoteUrl.match(/https:\/\/(.+)/);
+        if (urlParts) {
+          const credentialEntry = `https://${finalCredentials.username}:${finalCredentials.token || finalCredentials.password}@${urlParts[1]}\n`;
           
-          // Set git credential helper to use our token
-          const gitCommands = [
-            `git config credential.helper ""`, // Clear any existing helper
-            `git config credential.https://github.com.username ${finalCredentials.username}`,
-          ];
-          
-          for (const cmd of gitCommands) {
-            await execAsync(cmd, { cwd: projectPath });
-          }
-          
-          // Use the original remote with credentials in URL
-          const urlParts = remoteUrl.match(/https:\/\/(.+)/);
-          if (urlParts) {
-            // Create push command with credentials in URL
-            const credentialUrl = `https://${finalCredentials.username}:${finalCredentials.token}@${urlParts[1]}`;
-            pushCommand = `git push "${credentialUrl}" HEAD:refs/heads/${remoteBranch}`;
-            
-            console.log('Push command (credentials hidden):', pushCommand.replace(finalCredentials.token, 'TOKEN_HIDDEN'));
-          }
-        }
-        
-        // First fetch to update remote refs
-        console.log('Fetching latest remote refs...');
-        try {
-          await execAsync(`git fetch ${remoteName}`, { cwd: projectPath, timeout: 10000 });
-        } catch (e) {
-          console.log('Fetch failed:', e.message);
-        }
-        
-        // Check branch status before push
-        const { stdout: branchStatus } = await execAsync('git status -sb', { cwd: projectPath });
-        console.log('Branch status before push:', branchStatus.trim());
-        
-        // Check if there are commits to push
-        const { stdout: unpushedCommits } = await execAsync(`git log ${remoteName}/${remoteBranch}..HEAD --oneline`, { cwd: projectPath }).catch(() => ({ stdout: '' }));
-        console.log('Unpushed commits:', unpushedCommits.trim() || 'None');
-        
-        // Get the actual HEAD commit
-        const { stdout: headCommit } = await execAsync('git rev-parse HEAD', { cwd: projectPath });
-        console.log('Current HEAD commit:', headCommit.trim());
-        
-        // Get the remote branch commit
-        const { stdout: remoteCommit } = await execAsync(`git rev-parse ${remoteName}/${remoteBranch}`, { cwd: projectPath }).catch(() => ({ stdout: 'unknown' }));
-        console.log(`Remote ${remoteName}/${remoteBranch} commit:`, remoteCommit.trim());
-        
-        // Show what we're about to push
-        console.log(`About to push: ${branch} (HEAD) -> ${remoteBranch}`);
-        
-        // First, let's check what the remote actually has
-        if (remoteUrl.includes('https://') && finalCredentials.token) {
-          const urlParts = remoteUrl.match(/https:\/\/(.+)/);
-          if (urlParts) {
-            const credentialUrl = `https://${finalCredentials.username}:${finalCredentials.token}@${urlParts[1]}`;
-            
-            console.log('Checking remote refs directly...');
-            try {
-              const { stdout: remoteRefs } = await execAsync(`git ls-remote "${credentialUrl}" refs/heads/${remoteBranch}`, { 
-                cwd: projectPath,
-                timeout: 10000
-              });
-              console.log('Remote refs check:', remoteRefs.trim());
-              
-              if (remoteRefs.trim()) {
-                const remoteHash = remoteRefs.trim().split('\t')[0];
-                console.log('Remote HEAD hash:', remoteHash);
-                console.log('Local HEAD hash:', headCommit.trim());
-                
-                if (remoteHash === headCommit.trim()) {
-                  console.log('WARNING: Remote already has this commit!');
-                }
-              }
-            } catch (e) {
-              console.log('Failed to check remote refs:', e.message);
-            }
-          }
-        }
-        
-        // Don't log the actual command as it contains credentials
-        const { stdout, stderr } = await execAsync(pushCommand, { 
-          cwd: projectPath,
-          env,
-          timeout: 30000 // 30 second timeout
-        });
-        
-        // Sanitize output to hide any credentials
-        const sanitizedStdout = stdout ? stdout.replace(/https:\/\/[^:]+:[^@]+@/g, 'https://[CREDENTIALS_HIDDEN]@') : '';
-        const sanitizedStderr = stderr ? stderr.replace(/https:\/\/[^:]+:[^@]+@/g, 'https://[CREDENTIALS_HIDDEN]@') : '';
-        
-        console.log('Push stdout:', sanitizedStdout);
-        console.log('Push stderr:', sanitizedStderr);
-        
-        // Check if push was successful
-        const pushSucceeded = stderr && stderr.includes('->');
-        
-        if (pushSucceeded) {
-          console.log('Push succeeded, updating remote tracking branch...');
-          // Update the remote tracking branch to match what we just pushed
+          // Append to git-credentials file (create if doesn't exist)
           try {
-            await execAsync(`git update-ref refs/remotes/${remoteName}/${remoteBranch} HEAD`, { cwd: projectPath });
-            console.log('Updated remote tracking branch');
-          } catch (e) {
-            console.log('Failed to update remote tracking branch:', e.message);
+            // Read existing credentials to avoid duplicates
+            let existingCredentials = '';
+            try {
+              existingCredentials = await fs.readFile(credentialsFile, 'utf-8');
+            } catch (error) {
+              // File doesn't exist, that's fine
+            }
+            
+            // Check if credential already exists for this host
+            const hostMatch = urlParts[1].split('/')[0];
+            if (!existingCredentials.includes(hostMatch)) {
+              await fs.appendFile(credentialsFile, credentialEntry, { mode: 0o600 });
+              console.log('Credentials stored in git credential helper');
+            } else {
+              console.log('Credentials already exist in git credential helper');
+            }
+          } catch (error) {
+            console.error('Failed to store credentials:', error);
+            // Continue without storing, push might still work
           }
         }
-        
-        // Add a small delay before cleanup to ensure git completes
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        
-        cleanup(); // Clean up credential files immediately on success
-        await cleanupGitConfig(); // Clean up git config
-        
-        res.json({ 
-          success: true, 
-          output: stdout || stderr || 'Push completed successfully', 
-          remoteName,
-          remoteBranch
-        });
-      } catch (pushError) {
-        cleanup(); // Clean up credential files on error
-        await cleanupGitConfig(); // Clean up git config
-        
-        throw pushError;
+      } catch (error) {
+        console.error('Failed to setup credential helper:', error);
+        // Continue without credential helper
       }
-    } else {
-      // No credentials provided, try push without authentication
-      // Set GIT_TERMINAL_PROMPT=0 to prevent git from asking for credentials
-      const { stdout } = await execAsync(`git push ${remoteName} ${remoteBranch}`, { 
-        cwd: projectPath,
-        timeout: 30000, // 30 second timeout
-        env: {
-          ...process.env,
-          GIT_TERMINAL_PROMPT: '0' // Disable terminal prompts
-        }
-      });
-      
-      res.json({ 
-        success: true, 
-        output: stdout || 'Push completed successfully', 
-        remoteName,
-        remoteBranch
-      });
     }
+
+    // Try to push using the credential helper
+    const { stdout } = await execAsync(`git push ${remoteName} ${remoteBranch}`, { 
+      cwd: projectPath,
+      timeout: 30000, // 30 second timeout
+      env: {
+        ...process.env,
+        GIT_TERMINAL_PROMPT: '0' // Disable terminal prompts
+      }
+    });
+    
+    res.json({ 
+      success: true, 
+      output: stdout || 'Push completed successfully', 
+      remoteName,
+      remoteBranch
+    });
   } catch (error) {
     console.error('Git push error:', error.message);
-    console.error('Full error:', error);
     
     // Enhanced error handling for common push scenarios
     let errorMessage = 'Push failed';
     let details = error.message;
+    let remoteName = 'origin';
     
     if (error.message.includes('rejected')) {
       errorMessage = 'Push rejected';
@@ -1068,7 +1002,8 @@ router.post('/push', async (req, res) => {
       // Try to determine the remote type from the URL
       let remoteType = 'generic';
       try {
-        const { stdout: urlOutput } = await execAsync(`git remote get-url ${remoteName || 'origin'}`, { cwd: projectPath });
+        const projectPath = await getActualProjectPath(project, req.user?.username);
+        const { stdout: urlOutput } = await execAsync(`git remote get-url ${remoteName}`, { cwd: projectPath });
         const remoteUrl = urlOutput.trim();
         
         if (remoteUrl.includes('github.com')) {

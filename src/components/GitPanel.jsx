@@ -443,28 +443,54 @@ function GitPanel({ selectedProject, isMobile }) {
     }
   };
 
-  const handlePull = async () => {
+  const handlePull = async (credentials = null) => {
     setIsPulling(true);
     try {
       const response = await authenticatedFetch('/api/git/pull', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          project: selectedProject.name
+          project: selectedProject.name,
+          credentials: credentials
         })
       });
       
       const data = await response.json();
-      if (data.success) {
+      if (response.status === 401 && data.requiresAuth) {
+        // Authentication required
+        console.log('Authentication required for pull, showing credential modal');
+        setRemoteType(data.remoteType || 'generic');
+        setCredentialError(data.details || 'Authentication required');
+        setShowCredentialModal(true);
+        setPendingPushCredentials({ type: 'pull', credentials: null });
+      } else if (data.success) {
         // Refresh status after successful pull
         fetchGitStatus();
         fetchRemoteStatus();
+        // Close credential modal if it was open
+        setShowCredentialModal(false);
+        setCredentialError('');
+        if (data.credentialHelperConfigured) {
+          console.log('Git credential helper configured for future operations');
+        }
       } else {
         console.error('Pull failed:', data.error);
-        // TODO: Show user-friendly error message
+        if (showCredentialModal) {
+          setCredentialError(data.details || data.error || 'Pull failed');
+        } else {
+          // Show error in confirmation modal
+          setConfirmAction({
+            type: 'error',
+            title: 'Pull Failed',
+            message: data.details || data.error || 'An error occurred while pulling from the remote repository.'
+          });
+        }
       }
     } catch (error) {
       console.error('Error pulling from remote:', error);
+      if (showCredentialModal) {
+        setCredentialError('Network error. Please check your connection.');
+      }
     } finally {
       setIsPulling(false);
     }
@@ -552,7 +578,12 @@ function GitPanel({ selectedProject, isMobile }) {
   };
 
   const handleCredentialSubmit = async (credentials) => {
-    await handlePush(credentials);
+    if (pendingPushCredentials?.type === 'pull') {
+      await handlePull(credentials);
+    } else {
+      await handlePush(credentials);
+    }
+    setPendingPushCredentials(null);
   };
 
   const handlePublish = async () => {
@@ -657,7 +688,7 @@ function GitPanel({ selectedProject, isMobile }) {
           await handleCommit();
           break;
         case 'pull':
-          await handlePull();
+          await handlePull(null);
           break;
         case 'push':
           await handlePush(null);
