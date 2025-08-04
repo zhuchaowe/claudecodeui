@@ -4,7 +4,7 @@ import { Input } from './ui/input';
 import { ScrollArea } from './ui/scroll-area';
 import { Badge } from './ui/badge';
 import ConfirmDialog from './ConfirmDialog';
-import ProxyConfigSettings from './ProxyConfigSettings';
+import AnthropicConfigSettings from './AnthropicConfigSettings';
 import { X, Plus, Settings, Shield, AlertTriangle, Moon, Sun, Server, Edit3, Trash2, Play, Globe, Terminal, Zap, LogOut, User } from 'lucide-react';
 import { useTheme } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -549,14 +549,14 @@ function ToolsSettings({ isOpen, onClose }) {
                 Tools
               </button>
               <button
-                onClick={() => setActiveTab('proxy')}
+                onClick={() => setActiveTab('anthropic')}
                 className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-                  activeTab === 'proxy'
+                  activeTab === 'anthropic'
                     ? 'border-blue-600 text-blue-600 dark:text-blue-400'
                     : 'border-transparent text-muted-foreground hover:text-foreground'
                 }`}
               >
-                Proxy
+                Anthropic
               </button>
               <button
                 onClick={() => setActiveTab('appearance')}
@@ -1267,10 +1267,10 @@ function ToolsSettings({ isOpen, onClose }) {
               </div>
             )}
 
-            {/* Proxy Tab */}
-            {activeTab === 'proxy' && (
+            {/* Anthropic Tab */}
+            {activeTab === 'anthropic' && (
               <div className="space-y-6 md:space-y-8">
-                <ProxyConfigSettings />
+                <AnthropicConfigSettings />
               </div>
             )}
 

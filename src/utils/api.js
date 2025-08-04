@@ -102,17 +102,17 @@ export const api = {
       authenticatedFetch(`/api/gitea/repos?page=${page}&limit=${limit}`),
   },
   
-  // Proxy configuration endpoints
-  proxyConfig: {
-    get: () => authenticatedFetch('/api/proxy-config'),
-    save: (config) => authenticatedFetch('/api/proxy-config', {
+  // Anthropic configuration endpoints
+  anthropicConfig: {
+    get: () => authenticatedFetch('/api/anthropic-config'),
+    save: (config) => authenticatedFetch('/api/anthropic-config', {
       method: 'POST',
       body: JSON.stringify(config),
     }),
-    disable: () => authenticatedFetch('/api/proxy-config', {
+    disable: () => authenticatedFetch('/api/anthropic-config', {
       method: 'DELETE',
     }),
-    test: (config) => authenticatedFetch('/api/proxy-config/test', {
+    test: (config) => authenticatedFetch('/api/anthropic-config/test', {
       method: 'POST',
       body: JSON.stringify(config),
     }),
