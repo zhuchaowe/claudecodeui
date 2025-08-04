@@ -24,32 +24,6 @@ This directory contains Docker configuration files for deploying Claude Code UI.
 
 ## Configuration
 
-### Using Alternative AI Providers (claude-code-proxy)
-
-The Docker image includes [claude-code-proxy](https://github.com/fuergaosi233/claude-code-proxy) which allows you to use alternative AI providers (DeepSeek, Kimi, OpenAI, etc.) instead of Anthropic's Claude API.
-
-To enable proxy mode, set the `OPENAI_API_KEY` environment variable:
-
-```bash
-# Example: Using DeepSeek
-OPENAI_API_KEY=sk-your-deepseek-api-key
-OPENAI_BASE_URL=https://api.deepseek.com/v1
-BIG_MODEL=deepseek-coder
-SMALL_MODEL=deepseek-coder
-
-# Example: Using Kimi (Moonshot)
-OPENAI_API_KEY=sk-your-moonshot-api-key
-OPENAI_BASE_URL=https://api.moonshot.cn/v1
-BIG_MODEL=kimi-k2-0711-preview
-SMALL_MODEL=kimi-k2-0711-preview
-```
-
-When proxy mode is enabled:
-- The proxy server starts automatically on port 8082 inside the container
-- `ANTHROPIC_BASE_URL` is automatically set to `http://localhost:8082`
-- All Claude API calls are redirected to your chosen provider
-
-See `.env.proxy-example` for more configuration examples.
 
 ### Environment Variables
 

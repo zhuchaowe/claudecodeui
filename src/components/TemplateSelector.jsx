@@ -85,14 +85,20 @@ const TemplateSelector = ({ onSelect, onClose, isVisible, position = 'bottom' })
   // Prevent body scroll when modal is open
   useEffect(() => {
     if (isVisible) {
-      // Store original body style
-      const originalStyle = window.getComputedStyle(document.body).overflow;
-      // Prevent scrolling
+      // Store original body style and position
+      const originalOverflow = document.body.style.overflow;
+      const originalPosition = document.body.style.position;
+      
+      // Prevent background scrolling while allowing modal content to scroll
       document.body.style.overflow = 'hidden';
+      document.body.style.position = 'fixed';
+      document.body.style.width = '100%';
       
       return () => {
-        // Restore original body style
-        document.body.style.overflow = originalStyle;
+        // Restore original body styles
+        document.body.style.overflow = originalOverflow;
+        document.body.style.position = originalPosition;
+        document.body.style.width = '';
       };
     }
   }, [isVisible]);
@@ -149,7 +155,7 @@ const TemplateSelector = ({ onSelect, onClose, isVisible, position = 'bottom' })
         <div className="template-modal-content flex-1 min-h-0 overflow-hidden">
           {showSearch ? (
             // Search Results
-            <div className="template-scroll-container h-full overflow-y-auto scrollbar-thin">
+            <div className="template-scroll-container h-full overflow-y-auto scrollbar-thin" style={{ overscrollBehavior: 'contain' }}>
               {filteredTemplates.length === 0 ? (
                 <div className="flex items-center justify-center h-32 text-gray-500 dark:text-gray-400">
                   没有找到匹配的模板
@@ -184,7 +190,7 @@ const TemplateSelector = ({ onSelect, onClose, isVisible, position = 'bottom' })
             </div>
           ) : (
             // Category View
-            <div className="template-scroll-container h-full overflow-y-auto scrollbar-thin">
+            <div className="template-scroll-container h-full overflow-y-auto scrollbar-thin" style={{ overscrollBehavior: 'contain' }}>
               <div className="p-4 space-y-6">
                 {Object.entries(templatesByCategory).map(([category, templates]) => (
                   <div key={category} className="space-y-3">

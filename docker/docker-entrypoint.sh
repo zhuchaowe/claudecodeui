@@ -46,36 +46,6 @@ if [ ! -f /app/server/database/auth.db ]; then
     "
 fi
 
-# Start claude-code-proxy if OPENAI_API_KEY is set
-if [ -n "$OPENAI_API_KEY" ]; then
-    echo -e "${YELLOW}Starting claude-code-proxy...${NC}"
-    echo -e "${BLUE}Using OpenAI API base: ${OPENAI_BASE_URL:-https://api.openai.com/v1}${NC}"
-    echo -e "${BLUE}Big model: ${BIG_MODEL:-gpt-4}${NC}"
-    echo -e "${BLUE}Small model: ${SMALL_MODEL:-gpt-3.5-turbo}${NC}"
-    
-    # Create proxy .env file with environment variables
-    cat > /opt/claude-code-proxy/.env << EOF
-OPENAI_API_KEY="${OPENAI_API_KEY}"
-OPENAI_BASE_URL="${OPENAI_BASE_URL:-https://api.openai.com/v1}"
-BIG_MODEL="${BIG_MODEL:-gpt-4}"
-SMALL_MODEL="${SMALL_MODEL:-gpt-3.5-turbo}"
-EOF
-    
-    # Start proxy in background
-    cd /opt/claude-code-proxy && python3 start_proxy.py &
-    PROXY_PID=$!
-    echo -e "${GREEN}Claude-code-proxy started with PID: $PROXY_PID${NC}"
-    
-    # Wait a moment for proxy to start
-    sleep 2
-    
-    # Set Anthropic environment variables to use the proxy
-    export ANTHROPIC_BASE_URL="http://localhost:8082"
-    export ANTHROPIC_AUTH_TOKEN="${ANTHROPIC_AUTH_TOKEN:-some-api-key}"
-    echo -e "${GREEN}Anthropic API redirected to proxy${NC}"
-else
-    echo -e "${YELLOW}OPENAI_API_KEY not set, claude-code-proxy will not be started${NC}"
-fi
 
 # Function to check if running server mode
 is_server_mode() {

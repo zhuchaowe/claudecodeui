@@ -1,26 +1,6 @@
   使用方法：
 
-  1. 使用默认 Claude API（不设置 OPENAI_API_KEY）：
   docker-compose --env-file docker/.env up -d
-  2. 使用代理模式（设置 OPENAI_API_KEY）：
-  # 编辑 .env 文件，添加：
-  OPENAI_API_KEY=sk-your-api-key
-  OPENAI_BASE_URL=https://api.deepseek.com/v1
-  BIG_MODEL=deepseek-coder
-  SMALL_MODEL=deepseek-coder
-
-  # 然后启动
-  docker-compose --env-file docker/.env up -d
-
-  支持的提供商：
-
-  - DeepSeek
-  - Kimi (Moonshot)
-  - OpenAI
-  - 任何兼容 OpenAI API 的服务
-  - 本地 LLM（如 Ollama）
-
-  当代理模式启用时，所有 Claude API 调用都会被自动重定向到你选择的 AI 提供商！
 
 
 <div align="center">

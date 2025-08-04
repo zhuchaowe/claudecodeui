@@ -22,14 +22,6 @@ RUN npm ci
 # Install Claude Code globally
 RUN npm install -g @anthropic-ai/claude-code
 
-# Install Python dependencies for claude-code-proxy
-RUN apk add --no-cache python3-dev py3-pip
-
-# Clone and setup claude-code-proxy
-RUN git clone https://github.com/fuergaosi233/claude-code-proxy /opt/claude-code-proxy && \
-    cd /opt/claude-code-proxy && \
-    pip3 install --no-cache-dir -r requirements.txt --break-system-packages && \
-    cp .env.example .env
 
 # Copy the entire project
 COPY . .
@@ -71,7 +63,6 @@ RUN mkdir -p /home/node/.claude && \
     chown -R node:node /app && \
     chown -R node:node /home/node && \
     chown -R node:node /usr/local/lib/node_modules/@anthropic-ai/claude-code && \
-    chown -R node:node /opt/claude-code-proxy && \
     chmod -R 755 /app/data && \
     chmod -R 755 /app/server/database
 
