@@ -1706,11 +1706,17 @@ app.post('/api/projects/:projectName/upload-images', authenticateToken, async (r
 
 // Serve React app for all other routes
 app.get('*', (req, res) => {
-  if (process.env.NODE_ENV === 'production') {
-    res.sendFile(path.join(__dirname, '../dist/index.html'));
+  // Always serve the built index.html file for SPA routing
+  // This ensures all routes are handled by React Router
+  const indexPath = path.join(__dirname, '../dist/index.html');
+  
+  // Check if built files exist
+  if (fs.existsSync(indexPath)) {
+    res.sendFile(indexPath);
   } else {
     // In development, redirect to Vite dev server
-    res.redirect(`http://localhost:${process.env.VITE_PORT || 3001}`);
+    const viteDevPort = process.env.VITE_PORT || 3001;
+    res.redirect(`http://localhost:${viteDevPort}${req.originalUrl}`);
   }
 });
 
