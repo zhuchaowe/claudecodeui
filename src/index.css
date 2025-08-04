@@ -780,4 +780,41 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
+  
+  /* Template selector modal scrolling fixes */
+  .template-modal-content {
+    /* Ensure proper flex shrinking */
+    min-height: 0;
+    flex: 1;
+  }
+  
+  .template-scroll-container {
+    /* Force height calculation */
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+    /* Enable momentum scrolling on iOS */
+    -webkit-overflow-scrolling: touch;
+    /* Ensure proper scrolling behavior */
+    overscroll-behavior: contain;
+  }
+  
+  /* Mobile optimizations for template selector */
+  @media (max-width: 768px) {
+    .template-modal-content {
+      /* Ensure proper height on mobile */
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    
+    .template-scroll-container {
+      /* Better touch scrolling on mobile */
+      touch-action: pan-y;
+      -webkit-overflow-scrolling: touch;
+      /* Prevent body scroll when modal is open */
+      overscroll-behavior: contain;
+    }
+  }
 }

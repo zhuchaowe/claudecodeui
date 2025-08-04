@@ -82,6 +82,21 @@ const TemplateSelector = ({ onSelect, onClose, isVisible, position = 'bottom' })
     }
   }, [isVisible, onClose]);
 
+  // Prevent body scroll when modal is open
+  useEffect(() => {
+    if (isVisible) {
+      // Store original body style
+      const originalStyle = window.getComputedStyle(document.body).overflow;
+      // Prevent scrolling
+      document.body.style.overflow = 'hidden';
+      
+      return () => {
+        // Restore original body style
+        document.body.style.overflow = originalStyle;
+      };
+    }
+  }, [isVisible]);
+
   const handleTemplateSelect = (template) => {
     onSelect(template.content);
     onClose();
@@ -91,10 +106,10 @@ const TemplateSelector = ({ onSelect, onClose, isVisible, position = 'bottom' })
   if (!isVisible) return null;
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4 overflow-hidden">
       <div 
         ref={modalRef}
-        className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[80vh] flex flex-col"
+        className="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl max-h-[80vh] sm:max-h-[85vh] flex flex-col overflow-hidden"
       >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
@@ -131,10 +146,10 @@ const TemplateSelector = ({ onSelect, onClose, isVisible, position = 'bottom' })
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-hidden">
+        <div className="template-modal-content flex-1 min-h-0 overflow-hidden">
           {showSearch ? (
             // Search Results
-            <div className="h-full overflow-y-auto">
+            <div className="template-scroll-container h-full overflow-y-auto scrollbar-thin">
               {filteredTemplates.length === 0 ? (
                 <div className="flex items-center justify-center h-32 text-gray-500 dark:text-gray-400">
                   没有找到匹配的模板
@@ -152,7 +167,7 @@ const TemplateSelector = ({ onSelect, onClose, isVisible, position = 'bottom' })
                       }`}
                     >
                       <div className="flex items-center space-x-3">
-                        <span className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full">
+                        <span className="text-xs px-2 py-1 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded-full flex-shrink-0">
                           {template.category}
                         </span>
                         <h3 className="font-medium text-gray-900 dark:text-white">
@@ -169,11 +184,11 @@ const TemplateSelector = ({ onSelect, onClose, isVisible, position = 'bottom' })
             </div>
           ) : (
             // Category View
-            <div className="h-full overflow-y-auto">
+            <div className="template-scroll-container h-full overflow-y-auto scrollbar-thin">
               <div className="p-4 space-y-6">
                 {Object.entries(templatesByCategory).map(([category, templates]) => (
                   <div key={category} className="space-y-3">
-                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 sticky top-0 bg-white dark:bg-gray-800 pb-2">
+                    <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300 sticky top-0 bg-white dark:bg-gray-800 pb-2 z-10">
                       {category}
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
