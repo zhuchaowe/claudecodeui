@@ -268,7 +268,20 @@ app.get('/api/anthropic-config', authenticateToken, async (req, res) => {
       });
     }
     
-    const config = JSON.parse(user.anthropic_config);
+    let config;
+    try {
+      config = JSON.parse(user.anthropic_config);
+    } catch (parseError) {
+      console.error('Error parsing anthropic_config JSON:', parseError);
+      console.error('Raw anthropic_config value:', user.anthropic_config);
+      // Return default config if parse fails
+      return res.json({
+        enabled: false,
+        anthropicBaseUrl: '',
+        anthropicAuthToken: '',
+        anthropicApiKey: ''
+      });
+    }
     
     // Mask API keys for security
     if (config.anthropicAuthToken) {
@@ -281,6 +294,7 @@ app.get('/api/anthropic-config', authenticateToken, async (req, res) => {
     res.json(config);
   } catch (error) {
     console.error('Error getting anthropic config:', error);
+    console.error('Error stack:', error.stack);
     res.status(500).json({ error: 'Failed to get anthropic configuration' });
   }
 });

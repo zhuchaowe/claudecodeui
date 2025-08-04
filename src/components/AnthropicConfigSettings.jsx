@@ -13,6 +13,7 @@ const AnthropicConfigSettings = () => {
   });
   
   const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
   const [showAuthToken, setShowAuthToken] = useState(false);
@@ -55,6 +56,72 @@ const AnthropicConfigSettings = () => {
     }
   };
 
+  const saveConfig = async () => {
+    try {
+      setSaving(true);
+      setError(null);
+      setSuccess(null);
+      
+      const token = localStorage.getItem('auth-token');
+      
+      // If disabling configuration
+      if (!config.enabled) {
+        const response = await fetch('/api/anthropic-config', {
+          method: 'DELETE',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
+        });
+        
+        if (response.ok) {
+          setSuccess('Anthropic configuration disabled successfully');
+          setConfig({
+            enabled: false,
+            anthropicBaseUrl: '',
+            anthropicAuthToken: '',
+            anthropicApiKey: ''
+          });
+        } else {
+          throw new Error('Failed to disable configuration');
+        }
+      } else {
+        // Validate fields
+        if (!config.anthropicAuthToken && !config.anthropicApiKey) {
+          setError('At least one authentication method (auth token or API key) is required');
+          return;
+        }
+        
+        const response = await fetch('/api/anthropic-config', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            anthropicBaseUrl: config.anthropicBaseUrl,
+            anthropicAuthToken: config.anthropicAuthToken.startsWith('***') ? undefined : config.anthropicAuthToken,
+            anthropicApiKey: config.anthropicApiKey.startsWith('***') ? undefined : config.anthropicApiKey
+          })
+        });
+        
+        if (response.ok) {
+          const result = await response.json();
+          setSuccess('Anthropic configuration saved successfully. Changes will take effect immediately for new sessions.');
+          // Reload config to get masked keys
+          await loadConfig();
+        } else {
+          const error = await response.json();
+          throw new Error(error.error || 'Failed to save configuration');
+        }
+      }
+    } catch (error) {
+      console.error('Error saving anthropic config:', error);
+      setError(error.message || 'Failed to save Anthropic configuration');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const testConnection = async () => {
     try {
@@ -300,6 +367,23 @@ const AnthropicConfigSettings = () => {
         </div>
       )}
 
+      {/* Save Button */}
+      <div className="flex justify-end">
+        <Button
+          onClick={saveConfig}
+          disabled={saving}
+          className="bg-blue-600 hover:bg-blue-700 text-white"
+        >
+          {saving ? (
+            <>
+              <Loader2 className="w-4 h-4 animate-spin mr-2" />
+              Saving...
+            </>
+          ) : (
+            'Save Configuration'
+          )}
+        </Button>
+      </div>
     </div>
   );
 };
