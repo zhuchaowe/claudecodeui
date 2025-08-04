@@ -1290,6 +1290,41 @@ function handleShellConnection(ws) {
           username: ws.user?.username
         });
         
+        // Get user's anthropic configuration from database
+        let userAnthropicEnv = {};
+        const username = ws.user?.username;
+        if (username) {
+          try {
+            const userQuery = db.prepare('SELECT anthropic_config FROM users WHERE username = ?').get(username);
+            if (userQuery && userQuery.anthropic_config) {
+              const anthropicConfig = JSON.parse(userQuery.anthropic_config);
+              if (anthropicConfig.enabled) {
+                // Only override environment variables that user has explicitly set
+                userAnthropicEnv = {};
+                
+                // Only set if user provided a value
+                if (anthropicConfig.anthropicBaseUrl && anthropicConfig.anthropicBaseUrl.trim()) {
+                  userAnthropicEnv.ANTHROPIC_BASE_URL = anthropicConfig.anthropicBaseUrl;
+                }
+                
+                if (anthropicConfig.anthropicAuthToken && anthropicConfig.anthropicAuthToken.trim()) {
+                  userAnthropicEnv.ANTHROPIC_AUTH_TOKEN = anthropicConfig.anthropicAuthToken;
+                }
+                
+                if (anthropicConfig.anthropicApiKey && anthropicConfig.anthropicApiKey.trim()) {
+                  userAnthropicEnv.ANTHROPIC_API_KEY = anthropicConfig.anthropicApiKey;
+                }
+                
+                if (Object.keys(userAnthropicEnv).length > 0) {
+                  console.log('🔑 Using user Anthropic configuration for shell session:', username, 'with', Object.keys(userAnthropicEnv).join(', '));
+                }
+              }
+            }
+          } catch (error) {
+            console.error('Error loading user anthropic config for shell:', error);
+          }
+        }
+        
         // First send a welcome message
         const welcomeMsg = hasSession ? 
           `\x1b[36mResuming Claude session ${sessionId} in: ${projectPath}\x1b[0m\r\n` :
@@ -1330,6 +1365,7 @@ function handleShellConnection(ws) {
             cwd: process.env.HOME || '/', // Start from home directory
             env: { 
               ...process.env,
+              ...userAnthropicEnv, // Include user's anthropic configuration
               TERM: 'xterm-256color',
               COLORTERM: 'truecolor',
               FORCE_COLOR: '3',
