@@ -64,9 +64,6 @@ services:
       # Node home directory for persistent data
       - claude-node-home:/home/node
       
-      # Optional: Mount .env file if you want to update it without rebuilding
-      - ${ENV_FILE:-../.env}:/app/.env:ro
-      
       # Optional: Mount SSH keys for git operations
       - ${SSH_DIR:-~/.ssh}:/root/.ssh:ro
       
