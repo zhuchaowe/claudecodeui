@@ -4,8 +4,9 @@ import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Input } from './ui/input';
 import ConfirmDialog from './ConfirmDialog';
+import DeploymentManager from './DeploymentManager';
 
-import { FolderOpen, Folder, Plus, MessageSquare, Clock, ChevronDown, ChevronRight, Edit3, Check, X, Trash2, Settings, FolderPlus, RefreshCw, Sparkles, Edit2, Star, Search, Github, GitBranch } from 'lucide-react';
+import { FolderOpen, Folder, Plus, MessageSquare, Clock, ChevronDown, ChevronRight, Edit3, Check, X, Trash2, Settings, FolderPlus, RefreshCw, Sparkles, Edit2, Star, Search, Github, GitBranch, Rocket } from 'lucide-react';
 import { cn } from '../lib/utils';
 import ClaudeLogo from './ClaudeLogo';
 import { api } from '../utils/api';
@@ -98,6 +99,8 @@ function Sidebar({
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [editingSession, setEditingSession] = useState(null);
   const [editingSessionName, setEditingSessionName] = useState('');
+  const [showDeploymentManager, setShowDeploymentManager] = useState(false);
+  const [selectedProjectForDeployment, setSelectedProjectForDeployment] = useState(null);
   const [generatingSummary, setGeneratingSummary] = useState({});
   const [searchFilter, setSearchFilter] = useState('');
   const [confirmDialog, setConfirmDialog] = useState({ isOpen: false, action: null, data: null });
@@ -1662,6 +1665,22 @@ function Sidebar({
                                       : "text-gray-600 dark:text-gray-400"
                                   )} />
                                 </button>
+                                {/* Deployment button */}
+                                <button
+                                  className="w-8 h-8 rounded-lg bg-blue-500/10 dark:bg-blue-900/30 flex items-center justify-center active:scale-90 border border-blue-200 dark:border-blue-800"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setSelectedProjectForDeployment(project);
+                                    setShowDeploymentManager(true);
+                                  }}
+                                  onTouchEnd={handleTouchClick(() => {
+                                    setSelectedProjectForDeployment(project);
+                                    setShowDeploymentManager(true);
+                                  })}
+                                  title="Manage deployments"
+                                >
+                                  <Rocket className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                                </button>
                                 {(!project.isShared || project.isShared) && (
                                   <button
                                     className="w-8 h-8 rounded-lg bg-red-500/10 dark:bg-red-900/30 flex items-center justify-center active:scale-90 border border-red-200 dark:border-red-800"
@@ -2229,6 +2248,17 @@ function Sidebar({
         cancelText="Cancel"
         variant={confirmDialog.action === 'deleteSession' ? 'warning' : 'danger'}
       />
+      
+      {/* Deployment Manager Modal */}
+      {showDeploymentManager && selectedProjectForDeployment && (
+        <DeploymentManager
+          project={selectedProjectForDeployment}
+          onClose={() => {
+            setShowDeploymentManager(false);
+            setSelectedProjectForDeployment(null);
+          }}
+        />
+      )}
     </div>
   );
 }

@@ -50,6 +50,7 @@ import mcpRoutes from './routes/mcp.js';
 import githubRoutes from './routes/github.js';
 import giteaRoutes from './routes/gitea.js';
 import emailRoutes from './routes/email.js';
+import deploymentRoutes from './routes/deployment.js';
 import emailService from './services/emailService.js';
 import { initializeDatabase } from './database/db.js';
 import { validateApiKey, authenticateToken, authenticateWebSocket } from './middleware/auth.js';
@@ -229,6 +230,9 @@ const wss = new WebSocketServer({
 app.use(cors());
 app.use(express.json());
 
+// Make WebSocket connections available to routes
+app.locals.connectedClients = connectedClients;
+
 // Optional API key validation (if configured)
 app.use('/api', validateApiKey);
 
@@ -251,6 +255,9 @@ console.log('Gitea routes configured. GITEA_CLIENT_ID:', process.env.GITEA_CLIEN
 
 // Email API Routes (protected)
 app.use('/api/email', emailRoutes);
+
+// Deployment API Routes (protected)
+app.use('/api/deployment', deploymentRoutes);
 
 // Anthropic Configuration API Routes (protected)
 app.get('/api/anthropic-config', authenticateToken, async (req, res) => {

@@ -12,6 +12,7 @@ const INIT_SQL_PATH = path.join(__dirname, 'init.sql');
 const PROJECTS_SQL_PATH = path.join(__dirname, 'projects-ownership.sql');
 const SHARED_PROJECTS_SQL_PATH = path.join(__dirname, 'migrate-shared-projects.sql');
 const PATH_MAPPINGS_SQL_PATH = path.join(__dirname, 'path-mappings.sql');
+const DEPLOYMENT_SYSTEM_SQL_PATH = path.join(__dirname, 'migrate-deployment-system.sql');
 
 // Ensure data directory exists
 const dataDir = path.join(__dirname, 'data');
@@ -113,6 +114,10 @@ const initializeDatabase = async () => {
     // Initialize path mappings table
     const pathMappingsSQL = fs.readFileSync(PATH_MAPPINGS_SQL_PATH, 'utf8');
     db.exec(pathMappingsSQL);
+    
+    // Initialize deployment system tables
+    const deploymentSystemSQL = fs.readFileSync(DEPLOYMENT_SYSTEM_SQL_PATH, 'utf8');
+    db.exec(deploymentSystemSQL);
     
     // Run any necessary migrations
     runMigrations();
@@ -455,6 +460,213 @@ const pathMappingDb = {
   }
 };
 
+// Deployment system database operations
+const deploymentDb = {
+  // Deployment servers management
+  createServer: (serverConfig) => {
+    try {
+      const stmt = db.prepare(`
+        INSERT INTO deployment_servers 
+        (name, host, port, username, ssh_key, ssh_password, docker_compose_path, nginx_config_path, base_domain, port_range_start, port_range_end, max_deployments_per_user, auto_cleanup_days)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const result = stmt.run(
+        serverConfig.name, serverConfig.host, serverConfig.port || 22, serverConfig.username,
+        serverConfig.ssh_key, serverConfig.ssh_password, serverConfig.docker_compose_path || '/opt/deployments',
+        serverConfig.nginx_config_path || '/etc/nginx/sites-available', serverConfig.base_domain,
+        serverConfig.port_range_start || 3000, serverConfig.port_range_end || 4999,
+        serverConfig.max_deployments_per_user || 5, serverConfig.auto_cleanup_days || 7
+      );
+      return { id: result.lastInsertRowid, ...serverConfig };
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  getServers: () => {
+    try {
+      return db.prepare('SELECT * FROM deployment_servers WHERE status = "active" ORDER BY name').all();
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  getServerById: (serverId) => {
+    try {
+      return db.prepare('SELECT * FROM deployment_servers WHERE id = ?').get(serverId);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Branch deployments management
+  createDeployment: (deploymentConfig) => {
+    try {
+      const stmt = db.prepare(`
+        INSERT INTO branch_deployments 
+        (project_id, server_id, username, branch, container_name, port, subdomain, full_url, commit_hash, deploy_config, resources_config, health_check_url, expires_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const result = stmt.run(
+        deploymentConfig.project_id, deploymentConfig.server_id, deploymentConfig.username,
+        deploymentConfig.branch, deploymentConfig.container_name, deploymentConfig.port,
+        deploymentConfig.subdomain, deploymentConfig.full_url, deploymentConfig.commit_hash,
+        JSON.stringify(deploymentConfig.deploy_config || {}), JSON.stringify(deploymentConfig.resources_config || {}),
+        deploymentConfig.health_check_url, deploymentConfig.expires_at
+      );
+      return { id: result.lastInsertRowid, ...deploymentConfig };
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  getDeploymentsByUser: (username) => {
+    try {
+      return db.prepare(`
+        SELECT bd.*, ds.name as server_name, ds.host as server_host 
+        FROM branch_deployments bd 
+        JOIN deployment_servers ds ON bd.server_id = ds.id 
+        WHERE bd.username = ? 
+        ORDER BY bd.last_deployed DESC
+      `).all(username);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  getDeploymentsByProject: (projectId) => {
+    try {
+      return db.prepare(`
+        SELECT bd.*, ds.name as server_name, ds.host as server_host 
+        FROM branch_deployments bd 
+        JOIN deployment_servers ds ON bd.server_id = ds.id 
+        WHERE bd.project_id = ? 
+        ORDER BY bd.last_deployed DESC
+      `).all(projectId);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  getDeployment: (deploymentId) => {
+    try {
+      return db.prepare(`
+        SELECT bd.*, ds.name as server_name, ds.host as server_host, ds.docker_compose_path, ds.nginx_config_path
+        FROM branch_deployments bd 
+        JOIN deployment_servers ds ON bd.server_id = ds.id 
+        WHERE bd.id = ?
+      `).get(deploymentId);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  updateDeploymentStatus: (deploymentId, status, commitHash = null) => {
+    try {
+      const stmt = db.prepare(`
+        UPDATE branch_deployments 
+        SET status = ?, last_deployed = CURRENT_TIMESTAMP, commit_hash = COALESCE(?, commit_hash)
+        WHERE id = ?
+      `);
+      stmt.run(status, commitHash, deploymentId);
+      return true;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  deleteDeployment: (deploymentId) => {
+    try {
+      db.prepare('DELETE FROM branch_deployments WHERE id = ?').run(deploymentId);
+      return true;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Port management
+  allocatePort: (serverId, deploymentId = null) => {
+    try {
+      const server = db.prepare('SELECT port_range_start, port_range_end FROM deployment_servers WHERE id = ?').get(serverId);
+      if (!server) throw new Error('Server not found');
+
+      // Find an available port
+      const allocatedPorts = db.prepare('SELECT port FROM port_allocations WHERE server_id = ?').all(serverId);
+      const usedPorts = new Set(allocatedPorts.map(p => p.port));
+
+      for (let port = server.port_range_start; port <= server.port_range_end; port++) {
+        if (!usedPorts.has(port)) {
+          // Reserve the port
+          const stmt = db.prepare('INSERT INTO port_allocations (server_id, port, deployment_id) VALUES (?, ?, ?)');
+          stmt.run(serverId, port, deploymentId);
+          return port;
+        }
+      }
+      throw new Error('No available ports in range');
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  releasePort: (serverId, port) => {
+    try {
+      db.prepare('DELETE FROM port_allocations WHERE server_id = ? AND port = ?').run(serverId, port);
+      return true;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Deployment logs
+  addDeploymentLog: (deploymentId, step, status, output = '', details = '') => {
+    try {
+      const stmt = db.prepare(`
+        INSERT INTO deployment_logs (deployment_id, step, status, output, details)
+        VALUES (?, ?, ?, ?, ?)
+      `);
+      const result = stmt.run(deploymentId, step, status, output, details);
+      return result.lastInsertRowid;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  updateDeploymentLog: (logId, status, output = '', completedAt = null) => {
+    try {
+      const stmt = db.prepare(`
+        UPDATE deployment_logs 
+        SET status = ?, output = ?, completed_at = COALESCE(?, CURRENT_TIMESTAMP)
+        WHERE id = ?
+      `);
+      stmt.run(status, output, completedAt, logId);
+      return true;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  getDeploymentLogs: (deploymentId) => {
+    try {
+      return db.prepare('SELECT * FROM deployment_logs WHERE deployment_id = ? ORDER BY started_at ASC').all(deploymentId);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Cleanup expired deployments
+  getExpiredDeployments: () => {
+    try {
+      return db.prepare(`
+        SELECT * FROM branch_deployments 
+        WHERE expires_at < CURRENT_TIMESTAMP AND status != 'cleanup'
+        ORDER BY expires_at ASC
+      `).all();
+    } catch (err) {
+      throw err;
+    }
+  }
+};
+
 // Run migrations on existing databases immediately
 try {
   const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
@@ -471,6 +683,7 @@ export {
   userDb,
   projectDb,
   pathMappingDb,
+  deploymentDb,
   updateUserGithubToken,
   updateUserGiteaToken,
   getUserById
