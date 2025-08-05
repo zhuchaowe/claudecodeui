@@ -152,10 +152,10 @@ const TemplateSelector = ({ onSelect, onClose, isVisible, position = 'bottom' })
         </div>
 
         {/* Content */}
-        <div className="template-modal-content flex-1 min-h-0 overflow-hidden">
+        <div className="template-modal-content flex-1 min-h-0 overflow-y-auto scrollbar-thin">
           {showSearch ? (
             // Search Results
-            <div className="template-scroll-container h-full overflow-y-auto scrollbar-thin" style={{ overscrollBehavior: 'contain' }}>
+            <div className="template-scroll-container h-full" style={{ overscrollBehavior: 'contain' }}>
               {filteredTemplates.length === 0 ? (
                 <div className="flex items-center justify-center h-32 text-gray-500 dark:text-gray-400">
                   没有找到匹配的模板
