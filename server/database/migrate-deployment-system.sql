@@ -122,7 +122,5 @@ INSERT OR IGNORE INTO deployment_templates (
 );
 
 -- Add deployment-related columns to existing projects table if needed
--- (This assumes the projects table exists from the original schema)
-ALTER TABLE projects ADD COLUMN deployment_enabled BOOLEAN DEFAULT FALSE;
-ALTER TABLE projects ADD COLUMN default_deployment_server_id INTEGER REFERENCES deployment_servers(id);
-ALTER TABLE projects ADD COLUMN deployment_config TEXT; -- JSON config for deployment settings
+-- Check if columns exist before adding them to avoid errors
+-- Note: SQLite doesn't support IF NOT EXISTS for columns, so we'll handle this in the migration code

@@ -1837,6 +1837,18 @@ function Sidebar({
                                   : "text-muted-foreground"
                               )} />
                             </div>
+                            {/* Deployment button */}
+                            <div
+                              className="w-6 h-6 opacity-0 group-hover:opacity-100 transition-all duration-200 hover:bg-blue-50 dark:hover:bg-blue-900/20 flex items-center justify-center rounded cursor-pointer touch:opacity-100"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedProjectForDeployment(project);
+                                setShowDeploymentManager(true);
+                              }}
+                              title="Manage deployments"
+                            >
+                              <Rocket className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+                            </div>
                             <div
                               className="w-6 h-6 opacity-0 group-hover:opacity-100 transition-all duration-200 hover:bg-accent flex items-center justify-center rounded cursor-pointer touch:opacity-100"
                               onClick={(e) => {

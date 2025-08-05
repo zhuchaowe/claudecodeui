@@ -9,6 +9,7 @@ const __dirname = dirname(__filename);
 
 const DB_PATH = path.join(__dirname, 'data', 'auth.db');
 const INIT_SQL_PATH = path.join(__dirname, 'init.sql');
+const PROJECTS_TABLE_SQL_PATH = path.join(__dirname, 'projects.sql');
 const PROJECTS_SQL_PATH = path.join(__dirname, 'projects-ownership.sql');
 const SHARED_PROJECTS_SQL_PATH = path.join(__dirname, 'migrate-shared-projects.sql');
 const PATH_MAPPINGS_SQL_PATH = path.join(__dirname, 'path-mappings.sql');
@@ -24,18 +25,7 @@ if (!fs.existsSync(dataDir)) {
 const db = new Database(DB_PATH);
 console.log('Connected to SQLite database');
 
-// Run migrations immediately on database connection
-// This ensures existing databases get updated columns
-try {
-  // Only run if users table exists (database already initialized)
-  const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
-  if (tableExists) {
-    // We'll run the migration function after it's defined
-    console.log('Checking for required database migrations...');
-  }
-} catch (error) {
-  console.log('Database not yet initialized');
-}
+// Database migrations will be handled during initialization
 
 // Check if column exists in table
 const columnExists = (tableName, columnName) => {
@@ -90,6 +80,22 @@ const runMigrations = () => {
       db.exec(sharedProjectsSQL);
     }
     
+    // Add deployment columns to projects table if they don't exist
+    if (!columnExists('projects', 'deployment_enabled')) {
+      console.log('Adding deployment_enabled column to projects table...');
+      db.exec('ALTER TABLE projects ADD COLUMN deployment_enabled BOOLEAN DEFAULT FALSE');
+    }
+    
+    if (!columnExists('projects', 'default_deployment_server_id')) {
+      console.log('Adding default_deployment_server_id column to projects table...');
+      db.exec('ALTER TABLE projects ADD COLUMN default_deployment_server_id INTEGER REFERENCES deployment_servers(id)');
+    }
+    
+    if (!columnExists('projects', 'deployment_config')) {
+      console.log('Adding deployment_config column to projects table...');
+      db.exec('ALTER TABLE projects ADD COLUMN deployment_config TEXT');
+    }
+    
     console.log('Migrations completed successfully');
   } catch (error) {
     console.error('Error running migrations:', error.message);
@@ -102,6 +108,10 @@ const initializeDatabase = async () => {
   try {
     const initSQL = fs.readFileSync(INIT_SQL_PATH, 'utf8');
     db.exec(initSQL);
+    
+    // Initialize projects table first
+    const projectsTableSQL = fs.readFileSync(PROJECTS_TABLE_SQL_PATH, 'utf8');
+    db.exec(projectsTableSQL);
     
     // Initialize projects ownership table
     const projectsSQL = fs.readFileSync(PROJECTS_SQL_PATH, 'utf8');
@@ -485,8 +495,14 @@ const deploymentDb = {
 
   getServers: () => {
     try {
-      return db.prepare('SELECT * FROM deployment_servers WHERE status = "active" ORDER BY name').all();
+      // First try to get all servers to check if table exists
+      const allServers = db.prepare("SELECT * FROM deployment_servers ORDER BY name").all();
+      console.log('All deployment servers:', allServers);
+      
+      // Then filter by status
+      return allServers.filter(server => server.status === 'active');
     } catch (err) {
+      console.error('Error in getServers:', err.message);
       throw err;
     }
   },
@@ -494,6 +510,45 @@ const deploymentDb = {
   getServerById: (serverId) => {
     try {
       return db.prepare('SELECT * FROM deployment_servers WHERE id = ?').get(serverId);
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  updateServer: (serverId, serverConfig) => {
+    try {
+      const stmt = db.prepare(`
+        UPDATE deployment_servers 
+        SET name = ?, host = ?, port = ?, username = ?, ssh_key = ?, ssh_password = ?, 
+            docker_compose_path = ?, nginx_config_path = ?, base_domain = ?, 
+            port_range_start = ?, port_range_end = ?, max_deployments_per_user = ?, 
+            auto_cleanup_days = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `);
+      const result = stmt.run(
+        serverConfig.name, serverConfig.host, serverConfig.port || 22, serverConfig.username,
+        serverConfig.ssh_key, serverConfig.ssh_password, serverConfig.docker_compose_path || '/opt/deployments',
+        serverConfig.nginx_config_path || '/etc/nginx/sites-available', serverConfig.base_domain,
+        serverConfig.port_range_start || 3000, serverConfig.port_range_end || 4999,
+        serverConfig.max_deployments_per_user || 5, serverConfig.auto_cleanup_days || 7,
+        serverId
+      );
+      
+      if (result.changes > 0) {
+        return db.prepare('SELECT * FROM deployment_servers WHERE id = ?').get(serverId);
+      } else {
+        throw new Error('Server not found or not updated');
+      }
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  deleteServer: (serverId) => {
+    try {
+      const stmt = db.prepare('DELETE FROM deployment_servers WHERE id = ?');
+      const result = stmt.run(serverId);
+      return result.changes > 0;
     } catch (err) {
       throw err;
     }
@@ -667,15 +722,7 @@ const deploymentDb = {
   }
 };
 
-// Run migrations on existing databases immediately
-try {
-  const tableExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='users'").get();
-  if (tableExists) {
-    runMigrations();
-  }
-} catch (error) {
-  console.log('Migration check error:', error.message);
-}
+// Do not run migrations immediately on import - let initializeDatabase handle this
 
 export {
   db,

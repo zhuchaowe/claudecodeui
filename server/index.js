@@ -1947,7 +1947,7 @@ async function startServer() {
   try {
     // Initialize authentication database
     await initializeDatabase();
-    console.log('✅ Database initialization skipped (testing)');
+    console.log('✅ Database initialized successfully');
     
     server.listen(PORT, '0.0.0.0', async () => {
       console.log(`Claude Code UI server running on http://0.0.0.0:${PORT}`);

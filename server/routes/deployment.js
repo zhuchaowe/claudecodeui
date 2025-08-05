@@ -50,6 +50,75 @@ router.post('/servers', async (req, res) => {
 });
 
 /**
+ * PUT /api/deployment/servers/:serverId
+ * Update a deployment server
+ */
+router.put('/servers/:serverId', async (req, res) => {
+  try {
+    const serverId = parseInt(req.params.serverId);
+    const serverConfig = req.body;
+    
+    // Validate required fields
+    const requiredFields = ['name', 'host', 'username', 'base_domain'];
+    for (const field of requiredFields) {
+      if (!serverConfig[field]) {
+        return res.status(400).json({ error: `Missing required field: ${field}` });
+      }
+    }
+
+    // Check if server exists
+    const existingServer = deploymentDb.getServerById(serverId);
+    if (!existingServer) {
+      return res.status(404).json({ error: 'Server not found' });
+    }
+
+    // Update server
+    const updatedServer = deploymentDb.updateServer(serverId, serverConfig);
+    res.json(updatedServer);
+  } catch (error) {
+    console.error('Error updating deployment server:', error);
+    res.status(500).json({ error: 'Failed to update deployment server' });
+  }
+});
+
+/**
+ * DELETE /api/deployment/servers/:serverId
+ * Delete a deployment server
+ */
+router.delete('/servers/:serverId', async (req, res) => {
+  try {
+    const serverId = parseInt(req.params.serverId);
+    
+    // Check if server exists
+    const existingServer = deploymentDb.getServerById(serverId);
+    if (!existingServer) {
+      return res.status(404).json({ error: 'Server not found' });
+    }
+
+    // Check if server has active deployments
+    const deployments = deploymentDb.getDeploymentsByProject(0); // Get all deployments
+    const serverDeployments = deployments.filter(d => d.server_id === serverId && d.status === 'running');
+    
+    if (serverDeployments.length > 0) {
+      return res.status(400).json({ 
+        error: `Cannot delete server with ${serverDeployments.length} active deployments. Stop all deployments first.` 
+      });
+    }
+
+    // Delete server
+    const success = deploymentDb.deleteServer(serverId);
+    if (success) {
+      res.json({ success: true, message: 'Server deleted successfully' });
+    } else {
+      res.status(500).json({ error: 'Failed to delete server' });
+    }
+  } catch (error) {
+    console.error('Error deleting deployment server:', error);
+    res.status(500).json({ error: 'Failed to delete deployment server' });
+  }
+});
+
+/**
  * GET /api/deployment/deployments
  * Get deployments for the current user
  */
