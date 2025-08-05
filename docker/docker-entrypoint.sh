@@ -28,7 +28,7 @@ if [ ! -f /app/server/database/db.js ] && [ -f /app/database-schema/db.js ]; the
 fi
 
 # Initialize database if needed
-if [ ! -f /app/server/database/auth.db ]; then
+if [ ! -f /app/server/database/data/auth.db ]; then
     echo "Initializing database..."
     cd /app && node --input-type=module -e "
         import('./server/database/db.js').then(async (module) => {
