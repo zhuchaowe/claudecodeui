@@ -262,9 +262,8 @@ app.get('/api/anthropic-config', authenticateToken, async (req, res) => {
       // Return default config if not set
       return res.json({
         enabled: false,
-        anthropicBaseUrl: '',
-        anthropicAuthToken: '',
-        anthropicApiKey: ''
+        configurations: [],
+        activeConfigurationId: null
       });
     }
     
@@ -277,18 +276,35 @@ app.get('/api/anthropic-config', authenticateToken, async (req, res) => {
       // Return default config if parse fails
       return res.json({
         enabled: false,
-        anthropicBaseUrl: '',
-        anthropicAuthToken: '',
-        anthropicApiKey: ''
+        configurations: [],
+        activeConfigurationId: null
       });
     }
     
-    // Mask API keys for security
-    if (config.anthropicAuthToken) {
-      config.anthropicAuthToken = '***' + config.anthropicAuthToken.slice(-4);
+    // Handle old format (backward compatibility)
+    if (config.anthropicBaseUrl !== undefined || config.anthropicAuthToken !== undefined || config.anthropicApiKey !== undefined) {
+      // Old single config format - return as-is for migration
+      if (config.anthropicAuthToken) {
+        config.anthropicAuthToken = '***' + config.anthropicAuthToken.slice(-4);
+      }
+      if (config.anthropicApiKey) {
+        config.anthropicApiKey = '***' + config.anthropicApiKey.slice(-4);
+      }
+      return res.json(config);
     }
-    if (config.anthropicApiKey) {
-      config.anthropicApiKey = '***' + config.anthropicApiKey.slice(-4);
+    
+    // New multi-config format - mask API keys for security
+    if (config.configurations && Array.isArray(config.configurations)) {
+      config.configurations = config.configurations.map(cfg => {
+        const maskedConfig = { ...cfg };
+        if (maskedConfig.anthropicAuthToken) {
+          maskedConfig.anthropicAuthToken = '***' + maskedConfig.anthropicAuthToken.slice(-4);
+        }
+        if (maskedConfig.anthropicApiKey) {
+          maskedConfig.anthropicApiKey = '***' + maskedConfig.anthropicApiKey.slice(-4);
+        }
+        return maskedConfig;
+      });
     }
     
     res.json(config);
@@ -301,36 +317,65 @@ app.get('/api/anthropic-config', authenticateToken, async (req, res) => {
 
 app.post('/api/anthropic-config', authenticateToken, async (req, res) => {
   try {
-    const { anthropicBaseUrl, anthropicAuthToken, anthropicApiKey } = req.body;
+    const requestBody = req.body;
     
-    // Validate required fields
-    if (!anthropicAuthToken && !anthropicApiKey) {
-      return res.status(400).json({ error: 'At least one authentication method (auth token or API key) is required' });
-    }
-    
-    // Create anthropic config object
-    const anthropicConfig = {
-      enabled: true,
-      anthropicBaseUrl: anthropicBaseUrl || '',
-      anthropicAuthToken: anthropicAuthToken || '',
-      anthropicApiKey: anthropicApiKey || ''
-    };
-    
-    // Save to database
-    db.prepare('UPDATE users SET anthropic_config = ? WHERE id = ?')
-      .run(JSON.stringify(anthropicConfig), req.user.id);
-    
-    // Return masked config
-    res.json({ 
-      success: true, 
-      message: 'Anthropic configuration saved successfully',
-      config: {
-        enabled: true,
-        anthropicBaseUrl: anthropicConfig.anthropicBaseUrl,
-        anthropicAuthToken: anthropicConfig.anthropicAuthToken ? '***' + anthropicConfig.anthropicAuthToken.slice(-4) : '',
-        anthropicApiKey: anthropicConfig.anthropicApiKey ? '***' + anthropicConfig.anthropicApiKey.slice(-4) : ''
+    // Handle new multi-config format
+    if (requestBody.configurations && Array.isArray(requestBody.configurations)) {
+      // Validate that all configurations have required fields
+      for (const config of requestBody.configurations) {
+        if (!config.anthropicAuthToken && !config.anthropicApiKey) {
+          return res.status(400).json({ 
+            error: `Configuration "${config.name}" requires at least one authentication method (auth token or API key)` 
+          });
+        }
+        if (!config.name || !config.id) {
+          return res.status(400).json({ 
+            error: 'All configurations must have a name and ID' 
+          });
+        }
       }
-    });
+      
+      // Save the multi-config format
+      db.prepare('UPDATE users SET anthropic_config = ? WHERE id = ?')
+        .run(JSON.stringify(requestBody), req.user.id);
+      
+      res.json({ 
+        success: true, 
+        message: 'Anthropic configuration saved successfully'
+      });
+    } else {
+      // Handle legacy single-config format for backward compatibility
+      const { anthropicBaseUrl, anthropicAuthToken, anthropicApiKey } = requestBody;
+      
+      // Validate required fields
+      if (!anthropicAuthToken && !anthropicApiKey) {
+        return res.status(400).json({ error: 'At least one authentication method (auth token or API key) is required' });
+      }
+      
+      // Create anthropic config object in old format
+      const anthropicConfig = {
+        enabled: true,
+        anthropicBaseUrl: anthropicBaseUrl || '',
+        anthropicAuthToken: anthropicAuthToken || '',
+        anthropicApiKey: anthropicApiKey || ''
+      };
+      
+      // Save to database
+      db.prepare('UPDATE users SET anthropic_config = ? WHERE id = ?')
+        .run(JSON.stringify(anthropicConfig), req.user.id);
+      
+      // Return masked config
+      res.json({ 
+        success: true, 
+        message: 'Anthropic configuration saved successfully',
+        config: {
+          enabled: true,
+          anthropicBaseUrl: anthropicConfig.anthropicBaseUrl,
+          anthropicAuthToken: anthropicConfig.anthropicAuthToken ? '***' + anthropicConfig.anthropicAuthToken.slice(-4) : '',
+          anthropicApiKey: anthropicConfig.anthropicApiKey ? '***' + anthropicConfig.anthropicApiKey.slice(-4) : ''
+        }
+      });
+    }
   } catch (error) {
     console.error('Error saving anthropic config:', error);
     res.status(500).json({ error: 'Failed to save anthropic configuration' });
@@ -339,12 +384,11 @@ app.post('/api/anthropic-config', authenticateToken, async (req, res) => {
 
 app.delete('/api/anthropic-config', authenticateToken, async (req, res) => {
   try {
-    // Clear user's anthropic configuration
+    // Clear user's anthropic configuration (new format)
     const disabledConfig = {
       enabled: false,
-      anthropicBaseUrl: '',
-      anthropicAuthToken: '',
-      anthropicApiKey: ''
+      configurations: [],
+      activeConfigurationId: null
     };
     
     db.prepare('UPDATE users SET anthropic_config = ? WHERE id = ?')
@@ -367,6 +411,15 @@ app.post('/api/anthropic-config/test', authenticateToken, async (req, res) => {
     
     if ((!anthropicAuthToken && !anthropicApiKey)) {
       return res.status(400).json({ error: 'At least one authentication method is required for testing' });
+    }
+    
+    // Don't test masked credentials
+    if ((anthropicAuthToken && anthropicAuthToken.startsWith('***')) || 
+        (anthropicApiKey && anthropicApiKey.startsWith('***'))) {
+      return res.json({ 
+        success: false, 
+        message: 'Cannot test connection with masked credentials. Please re-enter your credentials.' 
+      });
     }
     
     // Use provided base URL or default Anthropic API
@@ -1299,24 +1352,53 @@ function handleShellConnection(ws) {
             if (userQuery && userQuery.anthropic_config) {
               const anthropicConfig = JSON.parse(userQuery.anthropic_config);
               if (anthropicConfig.enabled) {
-                // Only override environment variables that user has explicitly set
-                userAnthropicEnv = {};
-                
-                // Only set if user provided a value
-                if (anthropicConfig.anthropicBaseUrl && anthropicConfig.anthropicBaseUrl.trim()) {
-                  userAnthropicEnv.ANTHROPIC_BASE_URL = anthropicConfig.anthropicBaseUrl;
-                }
-                
-                if (anthropicConfig.anthropicAuthToken && anthropicConfig.anthropicAuthToken.trim()) {
-                  userAnthropicEnv.ANTHROPIC_AUTH_TOKEN = anthropicConfig.anthropicAuthToken;
-                }
-                
-                if (anthropicConfig.anthropicApiKey && anthropicConfig.anthropicApiKey.trim()) {
-                  userAnthropicEnv.ANTHROPIC_API_KEY = anthropicConfig.anthropicApiKey;
-                }
-                
-                if (Object.keys(userAnthropicEnv).length > 0) {
-                  console.log('🔑 Using user Anthropic configuration for shell session:', username, 'with', Object.keys(userAnthropicEnv).join(', '));
+                // Handle new multi-config format
+                if (anthropicConfig.configurations && anthropicConfig.activeConfigurationId) {
+                  const activeConfig = anthropicConfig.configurations.find(
+                    cfg => cfg.id === anthropicConfig.activeConfigurationId
+                  );
+                  
+                  if (activeConfig) {
+                    userAnthropicEnv = {};
+                    
+                    // Only set if user provided a value
+                    if (activeConfig.anthropicBaseUrl && activeConfig.anthropicBaseUrl.trim()) {
+                      userAnthropicEnv.ANTHROPIC_BASE_URL = activeConfig.anthropicBaseUrl;
+                    }
+                    
+                    if (activeConfig.anthropicAuthToken && activeConfig.anthropicAuthToken.trim()) {
+                      userAnthropicEnv.ANTHROPIC_AUTH_TOKEN = activeConfig.anthropicAuthToken;
+                    }
+                    
+                    if (activeConfig.anthropicApiKey && activeConfig.anthropicApiKey.trim()) {
+                      userAnthropicEnv.ANTHROPIC_API_KEY = activeConfig.anthropicApiKey;
+                    }
+                    
+                    if (Object.keys(userAnthropicEnv).length > 0) {
+                      console.log('🔑 Using user Anthropic configuration for shell session:', username, 
+                                 'config:', activeConfig.name, 'with', Object.keys(userAnthropicEnv).join(', '));
+                    }
+                  }
+                } else {
+                  // Handle old single-config format for backward compatibility
+                  userAnthropicEnv = {};
+                  
+                  // Only set if user provided a value
+                  if (anthropicConfig.anthropicBaseUrl && anthropicConfig.anthropicBaseUrl.trim()) {
+                    userAnthropicEnv.ANTHROPIC_BASE_URL = anthropicConfig.anthropicBaseUrl;
+                  }
+                  
+                  if (anthropicConfig.anthropicAuthToken && anthropicConfig.anthropicAuthToken.trim()) {
+                    userAnthropicEnv.ANTHROPIC_AUTH_TOKEN = anthropicConfig.anthropicAuthToken;
+                  }
+                  
+                  if (anthropicConfig.anthropicApiKey && anthropicConfig.anthropicApiKey.trim()) {
+                    userAnthropicEnv.ANTHROPIC_API_KEY = anthropicConfig.anthropicApiKey;
+                  }
+                  
+                  if (Object.keys(userAnthropicEnv).length > 0) {
+                    console.log('🔑 Using user Anthropic configuration for shell session:', username, 'with', Object.keys(userAnthropicEnv).join(', '));
+                  }
                 }
               }
             }

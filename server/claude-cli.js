@@ -263,24 +263,53 @@ async function spawnClaude(command, options = {}, ws) {
         if (userQuery && userQuery.anthropic_config) {
           const anthropicConfig = JSON.parse(userQuery.anthropic_config);
           if (anthropicConfig.enabled) {
-            // Only override environment variables that user has explicitly set
-            userAnthropicEnv = {};
-            
-            // Only set if user provided a value
-            if (anthropicConfig.anthropicBaseUrl && anthropicConfig.anthropicBaseUrl.trim()) {
-              userAnthropicEnv.ANTHROPIC_BASE_URL = anthropicConfig.anthropicBaseUrl;
-            }
-            
-            if (anthropicConfig.anthropicAuthToken && anthropicConfig.anthropicAuthToken.trim()) {
-              userAnthropicEnv.ANTHROPIC_AUTH_TOKEN = anthropicConfig.anthropicAuthToken;
-            }
-            
-            if (anthropicConfig.anthropicApiKey && anthropicConfig.anthropicApiKey.trim()) {
-              userAnthropicEnv.ANTHROPIC_API_KEY = anthropicConfig.anthropicApiKey;
-            }
-            
-            if (Object.keys(userAnthropicEnv).length > 0) {
-              console.log('🔑 Using user Anthropic configuration for', username, 'with', Object.keys(userAnthropicEnv).join(', '));
+            // Handle new multi-config format
+            if (anthropicConfig.configurations && anthropicConfig.activeConfigurationId) {
+              const activeConfig = anthropicConfig.configurations.find(
+                cfg => cfg.id === anthropicConfig.activeConfigurationId
+              );
+              
+              if (activeConfig) {
+                userAnthropicEnv = {};
+                
+                // Only set if user provided a value
+                if (activeConfig.anthropicBaseUrl && activeConfig.anthropicBaseUrl.trim()) {
+                  userAnthropicEnv.ANTHROPIC_BASE_URL = activeConfig.anthropicBaseUrl;
+                }
+                
+                if (activeConfig.anthropicAuthToken && activeConfig.anthropicAuthToken.trim()) {
+                  userAnthropicEnv.ANTHROPIC_AUTH_TOKEN = activeConfig.anthropicAuthToken;
+                }
+                
+                if (activeConfig.anthropicApiKey && activeConfig.anthropicApiKey.trim()) {
+                  userAnthropicEnv.ANTHROPIC_API_KEY = activeConfig.anthropicApiKey;
+                }
+                
+                if (Object.keys(userAnthropicEnv).length > 0) {
+                  console.log('🔑 Using user Anthropic configuration for', username, 
+                             'config:', activeConfig.name, 'with', Object.keys(userAnthropicEnv).join(', '));
+                }
+              }
+            } else {
+              // Handle old single-config format for backward compatibility
+              userAnthropicEnv = {};
+              
+              // Only set if user provided a value
+              if (anthropicConfig.anthropicBaseUrl && anthropicConfig.anthropicBaseUrl.trim()) {
+                userAnthropicEnv.ANTHROPIC_BASE_URL = anthropicConfig.anthropicBaseUrl;
+              }
+              
+              if (anthropicConfig.anthropicAuthToken && anthropicConfig.anthropicAuthToken.trim()) {
+                userAnthropicEnv.ANTHROPIC_AUTH_TOKEN = anthropicConfig.anthropicAuthToken;
+              }
+              
+              if (anthropicConfig.anthropicApiKey && anthropicConfig.anthropicApiKey.trim()) {
+                userAnthropicEnv.ANTHROPIC_API_KEY = anthropicConfig.anthropicApiKey;
+              }
+              
+              if (Object.keys(userAnthropicEnv).length > 0) {
+                console.log('🔑 Using user Anthropic configuration for', username, 'with', Object.keys(userAnthropicEnv).join(', '));
+              }
             }
           }
         }
