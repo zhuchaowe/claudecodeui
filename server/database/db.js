@@ -394,7 +394,7 @@ const mcpServerDb = {
   createMcpServer: (userId, name, type, config) => {
     try {
       const stmt = db.prepare(`
-        INSERT INTO mcp_servers (user_id, name, type, config) 
+        INSERT OR REPLACE INTO mcp_servers (user_id, name, type, config) 
         VALUES (?, ?, ?, ?)
       `);
       const result = stmt.run(userId, name, type, JSON.stringify(config));
