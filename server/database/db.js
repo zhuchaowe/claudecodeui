@@ -89,6 +89,15 @@ const runMigrations = () => {
       db.exec(sharedProjectsSQL);
     }
     
+    // Check if mcp_servers table exists, create it if not
+    const mcpServersExists = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_servers'").get();
+    if (!mcpServersExists) {
+      console.log('Creating mcp_servers table for user-isolated MCP configurations...');
+      const MCP_SERVERS_SQL_PATH = path.join(__dirname, 'create-mcp-servers.sql');
+      const mcpServersSQL = fs.readFileSync(MCP_SERVERS_SQL_PATH, 'utf8');
+      db.exec(mcpServersSQL);
+    }
+    
     console.log('Migrations completed successfully');
   } catch (error) {
     console.error('Error running migrations:', error.message);
@@ -379,6 +388,150 @@ const getUserById = (userId) => {
   }
 };
 
+// MCP Servers database operations
+const mcpServerDb = {
+  // Create an MCP server configuration
+  createMcpServer: (userId, name, type, config) => {
+    try {
+      const stmt = db.prepare(`
+        INSERT INTO mcp_servers (user_id, name, type, config) 
+        VALUES (?, ?, ?, ?)
+      `);
+      const result = stmt.run(userId, name, type, JSON.stringify(config));
+      return { 
+        id: result.lastInsertRowid, 
+        userId, 
+        name, 
+        type, 
+        config 
+      };
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Get all MCP servers for a user
+  getMcpServersByUser: (userId) => {
+    try {
+      const stmt = db.prepare(`
+        SELECT id, user_id, name, type, config, created_at, updated_at, is_active 
+        FROM mcp_servers 
+        WHERE user_id = ? AND is_active = 1
+        ORDER BY name
+      `);
+      const rows = stmt.all(userId);
+      return rows.map(row => ({
+        ...row,
+        config: JSON.parse(row.config)
+      }));
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Get a specific MCP server by ID and user
+  getMcpServer: (userId, serverId) => {
+    try {
+      const stmt = db.prepare(`
+        SELECT id, user_id, name, type, config, created_at, updated_at, is_active 
+        FROM mcp_servers 
+        WHERE id = ? AND user_id = ? AND is_active = 1
+      `);
+      const row = stmt.get(serverId, userId);
+      if (row) {
+        return {
+          ...row,
+          config: JSON.parse(row.config)
+        };
+      }
+      return null;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Get a specific MCP server by name and user
+  getMcpServerByName: (userId, name) => {
+    try {
+      const stmt = db.prepare(`
+        SELECT id, user_id, name, type, config, created_at, updated_at, is_active 
+        FROM mcp_servers 
+        WHERE user_id = ? AND name = ? AND is_active = 1
+      `);
+      const row = stmt.get(userId, name);
+      if (row) {
+        return {
+          ...row,
+          config: JSON.parse(row.config)
+        };
+      }
+      return null;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Update an MCP server configuration
+  updateMcpServer: (userId, serverId, name, type, config) => {
+    try {
+      const stmt = db.prepare(`
+        UPDATE mcp_servers 
+        SET name = ?, type = ?, config = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ? AND is_active = 1
+      `);
+      const result = stmt.run(name, type, JSON.stringify(config), serverId, userId);
+      return result.changes > 0;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Delete an MCP server (soft delete)
+  deleteMcpServer: (userId, serverId) => {
+    try {
+      const stmt = db.prepare(`
+        UPDATE mcp_servers 
+        SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+        WHERE id = ? AND user_id = ?
+      `);
+      const result = stmt.run(serverId, userId);
+      return result.changes > 0;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Delete an MCP server by name (soft delete)
+  deleteMcpServerByName: (userId, name) => {
+    try {
+      const stmt = db.prepare(`
+        UPDATE mcp_servers 
+        SET is_active = 0, updated_at = CURRENT_TIMESTAMP
+        WHERE user_id = ? AND name = ?
+      `);
+      const result = stmt.run(userId, name);
+      return result.changes > 0;
+    } catch (err) {
+      throw err;
+    }
+  },
+
+  // Check if user owns an MCP server
+  userOwnsMcpServer: (userId, serverId) => {
+    try {
+      const stmt = db.prepare(`
+        SELECT COUNT(*) as count 
+        FROM mcp_servers 
+        WHERE id = ? AND user_id = ? AND is_active = 1
+      `);
+      const result = stmt.get(serverId, userId);
+      return result.count > 0;
+    } catch (err) {
+      throw err;
+    }
+  }
+};
+
 // Path mapping database operations
 const pathMappingDb = {
   // Save a path mapping
@@ -470,6 +623,7 @@ export {
   initializeDatabase,
   userDb,
   projectDb,
+  mcpServerDb,
   pathMappingDb,
   updateUserGithubToken,
   updateUserGiteaToken,

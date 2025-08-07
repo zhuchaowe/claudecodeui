@@ -71,7 +71,7 @@ function ToolsSettings({ isOpen, onClose }) {
     try {
       const token = localStorage.getItem('auth-token');
       
-      // First try to get servers using Claude CLI
+      // First try to get servers using CLI route (now database-backed)
       const cliResponse = await fetch('/api/mcp/cli/list', {
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -81,10 +81,11 @@ function ToolsSettings({ isOpen, onClose }) {
       
       if (cliResponse.ok) {
         const cliData = await cliResponse.json();
+        
         if (cliData.success && cliData.servers) {
           // Convert CLI format to our format
           const servers = cliData.servers.map(server => ({
-            id: server.name,
+            id: server.name, // Keep using name as ID for compatibility
             name: server.name,
             type: server.type,
             scope: 'user',
@@ -104,8 +105,8 @@ function ToolsSettings({ isOpen, onClose }) {
         }
       }
       
-      // Fallback to direct config reading
-      const response = await fetch('/api/mcp/servers?scope=user', {
+      // Fallback to direct servers route
+      const response = await fetch('/api/mcp/servers', {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
@@ -114,12 +115,30 @@ function ToolsSettings({ isOpen, onClose }) {
       
       if (response.ok) {
         const data = await response.json();
-        setMcpServers(data.servers || []);
+        const servers = (data.servers || []).map(server => ({
+          id: server.id || server.name,
+          name: server.name,
+          type: server.type || 'stdio',
+          scope: server.scope || 'user',
+          config: server.config || {
+            command: '',
+            args: [],
+            env: {},
+            url: '',
+            headers: {},
+            timeout: 30000
+          },
+          created: server.created || new Date().toISOString(),
+          updated: server.updated || new Date().toISOString()
+        }));
+        setMcpServers(servers);
       } else {
         console.error('Failed to fetch MCP servers');
+        setMcpServers([]);
       }
     } catch (error) {
       console.error('Error fetching MCP servers:', error);
+      setMcpServers([]);
     }
   };
 

@@ -44,6 +44,7 @@ import mime from 'mime-types';
 import { getProjects, getSessions, getSessionMessages, renameProject, deleteSession, deleteProject, removeProjectAccess, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache, getUserProjectsDir, encodeProjectPath, backupProject, restoreProject, backupAllUserProjects, checkAndRestoreMissingProjects } from './projects.js';
 import { db, projectDb } from './database/db.js';
 import { spawnClaude, abortClaudeSession } from './claude-cli.js';
+import mcpConfigManager from './services/mcpConfigManager.js';
 import gitRoutes from './routes/git.js';
 import authRoutes from './routes/auth.js';
 import mcpRoutes from './routes/mcp.js';
@@ -1267,7 +1268,8 @@ function handleChatConnection(ws) {
         // Pass username for project ownership tracking
         const optionsWithUser = {
           ...data.options,
-          username: ws.user.username
+          username: ws.user.username,
+          userId: ws.user.id
         };
         
         await spawnClaude(data.command, optionsWithUser, ws);
@@ -1418,12 +1420,58 @@ function handleShellConnection(ws) {
         }));
         
         try {
+          // Generate user-specific MCP configuration for shell session
+          let tempConfigPath = null;
+          if (ws.user?.id) {
+            try {
+              console.log(`🔍 Creating user-specific MCP config for shell session (user ${ws.user.id})...`);
+              tempConfigPath = await mcpConfigManager.createUserTempConfig(ws.user.id, projectPath, sessionId);
+              
+              if (tempConfigPath) {
+                console.log(`📡 Generated user MCP config for shell: ${tempConfigPath}`);
+                
+                // Log the MCP servers in the config for debugging
+                try {
+                  const fs = await import('fs/promises');
+                  const configContent = await fs.readFile(tempConfigPath, 'utf8');
+                  const config = JSON.parse(configContent);
+                  const mcpServers = config.mcpServers || {};
+                  console.log(`🔧 MCP servers in shell config (${Object.keys(mcpServers).length}):`);
+                  for (const [name, serverConfig] of Object.entries(mcpServers)) {
+                    console.log(`  📡 ${name}: ${serverConfig.type} (${serverConfig.command || serverConfig.url})`);
+                  }
+                } catch (configReadError) {
+                  console.log('⚠️ Could not read generated config for debugging:', configReadError.message);
+                }
+              }
+            } catch (error) {
+              console.log('❌ MCP config setup failed for shell:', error.message);
+              console.log('Note: Shell will proceed without user-specific MCP support');
+            }
+          }
+          
           // Build shell command that changes to project directory first, then runs claude
           let claudeCommand = 'claude';
           
+          // Add user-specific MCP config if available
+          if (tempConfigPath) {
+            claudeCommand += ` --mcp-config "${tempConfigPath}"`;
+          }
+          
           if (hasSession && sessionId) {
-            // Try to resume session, but with fallback to new session if it fails
-            claudeCommand = `claude --resume ${sessionId} || claude`;
+            // For resume sessions, create fallback command structure
+            if (tempConfigPath) {
+              claudeCommand = `claude --resume ${sessionId} --mcp-config "${tempConfigPath}" || claude --mcp-config "${tempConfigPath}"`;
+            } else {
+              claudeCommand = `claude --resume ${sessionId} || claude`;
+            }
+          }
+          
+          // Store temp config path for cleanup later
+          if (tempConfigPath) {
+            // We'll need to clean this up when the shell session ends
+            ws.shellTempConfigPath = tempConfigPath;
+            ws.shellSessionId = sessionId;
           }
           
           // Create shell command that cds to the project directory first
@@ -1431,6 +1479,11 @@ function handleShellConnection(ws) {
           const shellCommand = `cd "${projectPath}" && ${claudeCommand}`;
           
           console.log('🔧 Executing shell command:', shellCommand);
+          console.log('📊 Shell MCP summary:');
+          console.log(`  - User ID: ${ws.user?.id}`);
+          console.log(`  - MCP config: ${tempConfigPath ? 'YES' : 'NO'}`);
+          console.log(`  - Session ID: ${sessionId}`);
+          console.log(`  - Resume: ${hasSession}`);
           
           // First check if claude command exists
           const checkCommand = 'which claude || echo "CLAUDE_NOT_FOUND"';
@@ -1531,7 +1584,7 @@ function handleShellConnection(ws) {
           });
           
           // Handle process exit
-          shellProcess.onExit((exitCode) => {
+          shellProcess.onExit(async (exitCode) => {
             console.log('🔚 Shell process exited with code:', exitCode.exitCode, 'signal:', exitCode.signal);
             if (ws.readyState === ws.OPEN) {
               ws.send(JSON.stringify({
@@ -1539,6 +1592,20 @@ function handleShellConnection(ws) {
                 data: `\r\n\x1b[33mProcess exited with code ${exitCode.exitCode}${exitCode.signal ? ` (${exitCode.signal})` : ''}\x1b[0m\r\n`
               }));
             }
+            
+            // Clean up temporary MCP config file if any
+            if (ws.shellTempConfigPath) {
+              try {
+                await mcpConfigManager.cleanupTempConfig(ws.shellTempConfigPath, ws.shellSessionId);
+                console.log('🗑️ Cleaned up shell MCP config after process exit:', ws.shellTempConfigPath);
+              } catch (error) {
+                console.error('Error cleaning up shell MCP config:', error);
+              }
+              // Clear the references
+              ws.shellTempConfigPath = null;
+              ws.shellSessionId = null;
+            }
+            
             shellProcess = null;
           });
           
@@ -1583,7 +1650,7 @@ function handleShellConnection(ws) {
     }
   });
   
-  ws.on('close', () => {
+  ws.on('close', async () => {
     console.log('🔌 Shell client disconnected:', {
       username: ws.user?.username,
       hadProcess: !!shellProcess
@@ -1591,6 +1658,16 @@ function handleShellConnection(ws) {
     if (shellProcess && shellProcess.kill) {
       console.log('🔴 Killing shell process:', shellProcess.pid);
       shellProcess.kill();
+    }
+    
+    // Clean up temporary MCP config file if any
+    if (ws.shellTempConfigPath) {
+      try {
+        await mcpConfigManager.cleanupTempConfig(ws.shellTempConfigPath, ws.shellSessionId);
+        console.log('🗑️ Cleaned up shell MCP config:', ws.shellTempConfigPath);
+      } catch (error) {
+        console.error('Error cleaning up shell MCP config:', error);
+      }
     }
   });
   

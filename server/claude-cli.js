@@ -4,12 +4,13 @@ import path from 'path';
 import os from 'os';
 import { db, projectDb } from './database/db.js';
 import { backupProject, encodeProjectPath } from './projects.js';
+import mcpConfigManager from './services/mcpConfigManager.js';
 
 let activeClaudeProcesses = new Map(); // Track active processes by session ID
 
 async function spawnClaude(command, options = {}, ws) {
   return new Promise(async (resolve, reject) => {
-    const { sessionId, projectPath, cwd, resume, toolsSettings, permissionMode, images, username, language } = options;
+    const { sessionId, projectPath, cwd, resume, toolsSettings, permissionMode, images, username, language, userId } = options;
     let capturedSessionId = sessionId; // Track session ID throughout the process
     let sessionCreatedSent = false; // Track if we've already sent session-created event
     
@@ -109,82 +110,39 @@ async function spawnClaude(command, options = {}, ws) {
     // Add basic flags
     args.push('--output-format', 'stream-json', '--verbose');
     
-    // Add MCP config flag only if MCP servers are configured
+    // Add user-specific MCP config if user is provided
+    let tempConfigPath = null;
     try {
-      console.log('🔍 Starting MCP config check...');
-      // Use already imported modules (fs.promises is imported as fs, path, os)
-      const fsSync = await import('fs'); // Import synchronous fs methods
-      console.log('✅ Successfully imported fs sync methods');
-      
-      // Check for MCP config in ~/.claude.json
-      const claudeConfigPath = path.join(os.homedir(), '.claude.json');
-      
-      console.log(`🔍 Checking for MCP configs in: ${claudeConfigPath}`);
-      console.log(`  Claude config exists: ${fsSync.existsSync(claudeConfigPath)}`);
-      
-      let hasMcpServers = false;
-      
-      // Check Claude config for MCP servers
-      if (fsSync.existsSync(claudeConfigPath)) {
-        try {
-          const claudeConfig = JSON.parse(fsSync.readFileSync(claudeConfigPath, 'utf8'));
-          
-          // Check global MCP servers
-          if (claudeConfig.mcpServers && Object.keys(claudeConfig.mcpServers).length > 0) {
-            console.log(`✅ Found ${Object.keys(claudeConfig.mcpServers).length} global MCP servers`);
-            hasMcpServers = true;
-          }
-          
-          // Check project-specific MCP servers
-          if (!hasMcpServers && claudeConfig.claudeProjects) {
-            const currentProjectPath = process.cwd();
-            const projectConfig = claudeConfig.claudeProjects[currentProjectPath];
-            if (projectConfig && projectConfig.mcpServers && Object.keys(projectConfig.mcpServers).length > 0) {
-              console.log(`✅ Found ${Object.keys(projectConfig.mcpServers).length} project MCP servers`);
-              hasMcpServers = true;
-            }
-          }
-        } catch (e) {
-          console.log(`❌ Failed to parse Claude config:`, e.message);
+      if (userId) {
+        console.log(`🔍 Creating user-specific MCP config for user ${userId}...`);
+        tempConfigPath = await mcpConfigManager.createUserTempConfig(userId, projectPath, sessionId);
+        
+        if (tempConfigPath) {
+          console.log(`📡 Adding user MCP config: ${tempConfigPath}`);
+          args.push('--mcp-config', tempConfigPath);
         }
-      }
-      
-      console.log(`🔍 hasMcpServers result: ${hasMcpServers}`);
-      
-      if (hasMcpServers) {
-        // Use Claude config file if it has MCP servers
-        let configPath = null;
+      } else {
+        // Fallback to original MCP config logic for backward compatibility
+        const fsSync = await import('fs');
+        const claudeConfigPath = path.join(os.homedir(), '.claude.json');
         
         if (fsSync.existsSync(claudeConfigPath)) {
           try {
             const claudeConfig = JSON.parse(fsSync.readFileSync(claudeConfigPath, 'utf8'));
-            
-            // Check if we have any MCP servers (global or project-specific)
             const hasGlobalServers = claudeConfig.mcpServers && Object.keys(claudeConfig.mcpServers).length > 0;
-            const currentProjectPath = process.cwd();
-            const projectConfig = claudeConfig.claudeProjects && claudeConfig.claudeProjects[currentProjectPath];
-            const hasProjectServers = projectConfig && projectConfig.mcpServers && Object.keys(projectConfig.mcpServers).length > 0;
             
-            if (hasGlobalServers || hasProjectServers) {
-              configPath = claudeConfigPath;
+            if (hasGlobalServers) {
+              console.log(`📡 Adding fallback MCP config: ${claudeConfigPath}`);
+              args.push('--mcp-config', claudeConfigPath);
             }
           } catch (e) {
-            // No valid config found
+            console.log(`❌ Failed to parse fallback Claude config:`, e.message);
           }
-        }
-        
-        if (configPath) {
-          console.log(`📡 Adding MCP config: ${configPath}`);
-          args.push('--mcp-config', configPath);
-        } else {
-          console.log('⚠️ MCP servers detected but no valid config file found');
         }
       }
     } catch (error) {
-      // If there's any error checking for MCP configs, don't add the flag
-      console.log('❌ MCP config check failed:', error.message);
-      console.log('📍 Error stack:', error.stack);
-      console.log('Note: MCP config check failed, proceeding without MCP support');
+      console.log('❌ MCP config setup failed:', error.message);
+      console.log('Note: MCP config setup failed, proceeding without MCP support');
     }
     
     // Add model for new sessions
@@ -442,6 +400,11 @@ async function spawnClaude(command, options = {}, ws) {
         backupProject(options.username, projectName)
           .then(() => console.log(`[Backup] Project ${projectName} backed up after session`))
           .catch(err => console.error(`[Backup] Failed to backup project ${projectName}:`, err));
+      }
+      
+      // Clean up temporary MCP config file if any
+      if (tempConfigPath) {
+        await mcpConfigManager.cleanupTempConfig(tempConfigPath, capturedSessionId || sessionId);
       }
       
       // Clean up temporary image files if any
