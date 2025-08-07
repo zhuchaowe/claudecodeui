@@ -192,6 +192,12 @@ export const promptTemplates = [
     content: '请统计项目的代码情况，包括：\n\n- 代码行数\n- 文件数量\n- 技术栈分布\n- 测试覆盖率'
   },
   {
+    id: 'analysis-log',
+    category: '🔍 代码分析',
+    title: '日志分析',
+    content: '请帮我根据日志打印代码和日志检索工具，进行综合分析，解决下面的问题：\n[描述你的需求]\n\n环境：[onprem/dev/prod]\n服务：[parser/mygpt/file-parser] \n时间范围：[YYYY-MM-DD HH:MM:SS] 到 [YYYY-MM-DD HH:MM:SS]\nTraceId: [traceid]'
+  },
+  {
     id: 'env-dev',
     category: '🛠️ 环境配置',
     title: '开发环境搭建',
