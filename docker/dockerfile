@@ -19,12 +19,13 @@ COPY package*.json ./
 # Install all dependencies (including dev dependencies for build)
 RUN npm ci
 
-# Install Claude Code globally
-RUN npm install -g @anthropic-ai/claude-code
 
 
 # Copy the entire project
 COPY . .
+
+# Install Claude Code globally
+RUN npm install -g @anthropic-ai/claude-code
 
 # Build the frontend
 RUN npm run build
